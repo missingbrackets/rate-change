@@ -1,6 +1,67 @@
 # app.R  ---- Single-file Shiny app (no external data) ----
 # Polished underwriting tool: why premium index < 100% even with flat ROL
 
+# ==============================================================================
+# LLOYD'S RATE CHANGE REQUIREMENTS SUMMARY
+# ==============================================================================
+#
+# Source: "Instructions for what is needed wit.txt"
+#
+# KEY CONCEPTS:
+# -------------
+# 1. RARC (Risk Adjusted Rate Change):
+#    - Measures price difference between current year charge vs. what would have
+#      been charged LAST YEAR for the EXACT SAME RISK
+#    - Net of claims inflation to show true impact on expected loss ratios
+#    - The standard metric Lloyd's uses to track "more or less money for same risk"
+#
+# 2. Benchmark Price:
+#    - Theoretical gross premium required to achieve the loss ratio set in the
+#      approved Syndicate Business Forecast (SBF)
+#
+# 3. Price Adequacy:
+#    - Comparison of achieved price against benchmark price
+#    - Ensures business written will meet profitability targets
+#
+# PMDR (Performance Management Data Return) - 4 COMPONENTS:
+# ---------------------------------------------------------
+# Syndicates must submit monthly PMDR breaking premium movements into:
+#
+#   Component 1: Change in Deductible / Attachment Point
+#                - Premium impact from shifts in risk retention level
+#
+#   Component 2: Change in Breadth of Cover
+#                - Premium movement from adding/removing perils
+#                  (e.g., adding cyber or piracy coverage)
+#
+#   Component 3: Other Factors
+#                - Changes in limits, exposure units (e.g., more ships, higher turnover),
+#                  or geographic shifts
+#
+#   Component 4: Pure Rate Change (THE RARC)
+#                - The "residual" movement - this IS the RARC
+#                - Price change NOT explained by exposure adjustments above
+#
+# ==============================================================================
+
+# Print summary to console on app load
+message("
+================================================================================
+LLOYD'S RATE CHANGE APP - Requirements Summary
+================================================================================
+RARC = Risk Adjusted Rate Change (price change for SAME risk, net of inflation)
+
+PMDR Decomposition:
+  1. Deductible/Attachment change
+
+  2. Breadth of Cover change (perils)
+  3. Other Factors (limits, exposure units, geography)
+  4. Pure Rate Change = RARC (the residual)
+
+This app will implement Lloyd's-style waterfall decomposition for satellite
+layer pricing, separating exposure-driven changes from pure rate movement.
+================================================================================
+")
 
 library(shiny)
 library(bslib)
@@ -303,6 +364,75 @@ ui <- page_sidebar(
     )
 )
 
+# ==============================================================================
+# IMPLEMENTATION PLAN: Lloyd's-Style Rate Change Reactives
+# ==============================================================================
+#
+# NEW REACTIVE OBJECTS TO ADD:
+# ----------------------------
+#
+# 1. prior_inputs()
+#    - PURPOSE: Capture last year's pricing inputs for re-rating comparison
+#    - RETURNS: List containing:
+#      * last_year_rol: Rate on Line from prior period
+#      * last_year_q_gu: Ground-up failure rates (optional, for advanced decomp)
+#      * last_year_layer_alloc: Layer allocation weights (optional)
+#    - USAGE: Forms baseline for "what would we have charged last year?"
+#
+# 2. current_inputs()
+#    - PURPOSE: Formalize current year pricing inputs (extends existing logic)
+#    - RETURNS: List containing:
+#      * current_rol: Current Rate on Line
+#      * current_q_gu: Current ground-up failure rates
+#      * current_layer_alloc: Current layer allocation weights
+#    - USAGE: The "actual price charged this year"
+#
+# 3. c_param_lookup()
+#    - PURPOSE: Load and interpolate Swiss Re c-parameters from CSV
+#    - SOURCE: /home/user/rate-change/c parameters.csv
+#    - RETURNS: Function or lookup table mapping c -> expectation
+#    - USAGE: Exposure curve parameterization for different risk profiles
+#
+# 4. prior_exposure_rerated_current_method()
+#    - PURPOSE: Re-rate last year's exposure using THIS year's methodology
+#    - RETURNS: List containing:
+#      * rerated_premium: What we'd charge for prior exposure at current rates
+#      * methodology_delta: Difference from actual prior premium
+#    - USAGE: Core of RARC calculation - isolates methodology changes
+#
+# 5. lloyds_decomp()
+#    - PURPOSE: Full Lloyd's PMDR-style waterfall decomposition
+#    - RETURNS: List containing 4 PMDR components:
+#      * delta_attachment: Premium impact from deductible/attachment change
+#      * delta_breadth: Premium impact from coverage breadth changes
+#      * delta_other: Premium impact from limits/exposure/geography
+#      * delta_pure_rate: THE RARC - residual pure rate change
+#    - USAGE: Official Lloyd's reporting breakdown
+#
+# 6. rarc_index()
+#    - PURPOSE: Calculate the pure Rate Adjusted Rate Change index
+#    - RETURNS: Numeric index where:
+#      * 100% = flat (same rate for same risk)
+#      * >100% = rate increase
+#      * <100% = rate decrease
+#    - FORMULA: current_premium / prior_exposure_rerated_current_method
+#    - USAGE: The single number Lloyd's cares about most
+#
+# WIRING PLAN:
+# ------------
+# prior_inputs() + current_inputs()
+#        |
+#        v
+# c_param_lookup() --> prior_exposure_rerated_current_method()
+#        |                            |
+#        v                            v
+# lloyds_decomp() <------------------ rarc_index()
+#        |
+#        v
+#   [Future UI: PMDR waterfall chart, RARC gauge]
+#
+# ==============================================================================
+
 # --------------------------
 # Server
 # --------------------------
@@ -405,6 +535,118 @@ server <- function(input, output, session) {
     }
 
     values_base <- reactive(schedule()$BaseValue)
+
+    # ==========================================================================
+    # LLOYD'S RATE CHANGE REACTIVE STUBS
+    # ==========================================================================
+    # These are placeholder reactives that return NULL for now.
+    # They will be implemented in subsequent iterations to provide
+    # full Lloyd's PMDR-compliant rate change decomposition.
+    # ==========================================================================
+
+    # --------------------------------------------------------------------------
+    # 1. prior_inputs()
+    # --------------------------------------------------------------------------
+    # Captures last year's pricing inputs for RARC comparison
+    # Will include: last_year_rol, last_year_q_gu (optional),
+    #               last_year_layer_alloc (optional)
+    # --------------------------------------------------------------------------
+    prior_inputs <- reactive({
+        # STUB: Returns NULL until implemented
+        # Future implementation will capture:
+        # - Last year's ROL (possibly from a UI input or stored value)
+        # - Last year's ground-up failure rates (if tracking year-over-year)
+        # - Last year's layer allocation weights
+        NULL
+    })
+
+    # --------------------------------------------------------------------------
+    # 2. current_inputs()
+    # --------------------------------------------------------------------------
+    # Formalizes current year pricing inputs (extends existing logic)
+    # Will include: current_rol, current_q_gu, current_layer_alloc
+    # --------------------------------------------------------------------------
+    current_inputs <- reactive({
+        # STUB: Returns NULL until implemented
+        # Future implementation will formalize:
+        # - Current ROL from input$rol
+        # - Current ground-up failure rates (q_gu vector)
+        # - Current layer allocation from exposure curve
+        NULL
+    })
+
+    # --------------------------------------------------------------------------
+    # 3. c_param_lookup()
+    # --------------------------------------------------------------------------
+    # Loads and provides lookup for Swiss Re c-parameters from CSV
+    # Source: /home/user/rate-change/c parameters.csv
+    # Returns: Function or data frame mapping c -> expectation
+    # --------------------------------------------------------------------------
+    c_param_lookup <- reactive({
+        # STUB: Returns NULL until implemented
+        # Future implementation will:
+        # - Read "c parameters.csv" (columns: c, expectation)
+        # - Provide interpolation function for arbitrary c values
+        # - Cache the lookup table for efficiency
+        NULL
+    })
+
+    # --------------------------------------------------------------------------
+    # 4. prior_exposure_rerated_current_method()
+    # --------------------------------------------------------------------------
+    # Re-rates last year's exposure using THIS year's methodology
+    # This is the core of RARC: "what would we charge for prior risk today?"
+    # Returns: List with rerated_premium and methodology_delta
+    # --------------------------------------------------------------------------
+    prior_exposure_rerated_current_method <- reactive({
+        # STUB: Returns NULL until implemented
+        # Future implementation will:
+        # - Take prior year's exposure (values, attachment, limit)
+        # - Apply current year's pricing methodology (ROL, curve, rates)
+        # - Calculate hypothetical premium = "same risk, current price"
+        # - Compare to actual prior premium for methodology delta
+        NULL
+    })
+
+    # --------------------------------------------------------------------------
+    # 5. lloyds_decomp()
+    # --------------------------------------------------------------------------
+    # Full Lloyd's PMDR-style waterfall decomposition
+    # Returns: List with 4 PMDR components:
+    #   delta_attachment, delta_breadth, delta_other, delta_pure_rate
+    # --------------------------------------------------------------------------
+    lloyds_decomp <- reactive({
+        # STUB: Returns NULL until implemented
+        # Future implementation will calculate:
+        # 1. delta_attachment: Premium impact from deductible/attachment change
+        # 2. delta_breadth: Premium impact from coverage scope changes
+        # 3. delta_other: Premium impact from limits/exposure units/geography
+        # 4. delta_pure_rate: THE RARC residual (what's left after 1-3)
+        #
+        # These will sum to total premium change: P_current - P_prior
+        NULL
+    })
+
+    # --------------------------------------------------------------------------
+    # 6. rarc_index()
+    # --------------------------------------------------------------------------
+    # The pure Risk Adjusted Rate Change index
+    # Returns: Numeric where 100% = flat, >100% = increase, <100% = decrease
+    # Formula: current_premium / prior_exposure_rerated_current_method
+    # --------------------------------------------------------------------------
+    rarc_index <- reactive({
+        # STUB: Returns NULL until implemented
+        # Future implementation will:
+        # - Get rerated prior premium from prior_exposure_rerated_current_method()
+        # - Get actual current premium from current()
+        # - Calculate RARC = actual_current / rerated_prior
+        # - This isolates pure rate movement from exposure changes
+        NULL
+    })
+
+    # ==========================================================================
+    # END LLOYD'S RATE CHANGE REACTIVE STUBS
+    # ==========================================================================
 
     prior <- reactive({
         calc_scenario(
