@@ -187,7 +187,102 @@ q_gu <- c(
   0.006066660583587538
 )
 
+# ==============================================================================
+# C-PARAMETER LOOKUP FROM CSV
+# ==============================================================================
+# Load the c-parameters CSV at startup (once, not reactive)
+# CSV columns: c (Swiss Re curve parameter), expectation (expected loss ratio)
+#
+# MAPPING LOGIC:
+# - Each satellite has a failure rate q_gu_i
+# - We interpret failure rate as an "expectation" measure
+# - Find the c value that corresponds to this expectation via interpolation
+# - Use linear interpolation between the two nearest points in the CSV
+# ==============================================================================
 
+# Read CSV at startup
+c_params_csv <- tryCatch(
+    read.csv("c parameters.csv", stringsAsFactors = FALSE),
+    error = function(e) {
+        message("Warning: Could not read 'c parameters.csv'. Using fallback.")
+        data.frame(c = c(0, 5, 10), expectation = c(1, 0.2, 0.001))
+    }
+)
+
+# Clean column names (handle BOM if present)
+names(c_params_csv) <- gsub("^\\W+", "", names(c_params_csv))
+
+# Ensure sorted by expectation (descending) for interpolation
+c_params_csv <- c_params_csv[order(c_params_csv$expectation, decreasing = TRUE), ]
+
+#' Map a failure rate (expectation) to a c parameter using linear interpolation
+#' @param failure_rate Numeric: the ground-up failure rate (q_gu) for a satellite
+#' @param lookup_df Data frame with columns 'c' and 'expectation'
+#' @return Numeric: the interpolated c value
+#' @details Uses linear interpolation. If failure_rate is outside the CSV range,
+#'          returns the boundary c value (clamped).
+map_failure_rate_to_c <- function(failure_rate, lookup_df = c_params_csv) {
+    # Handle edge cases
+
+if (is.na(failure_rate) || !is.finite(failure_rate)) return(NA_real_)
+
+    # Get expectation and c columns
+    exp_col <- lookup_df$expectation
+    c_col <- lookup_df$c
+
+    # Clamp to CSV range
+    min_exp <- min(exp_col)
+    max_exp <- max(exp_col)
+
+    if (failure_rate >= max_exp) {
+        # Higher than max expectation -> lowest c
+        return(c_col[which.max(exp_col)])
+    }
+    if (failure_rate <= min_exp) {
+        # Lower than min expectation -> highest c
+        return(c_col[which.min(exp_col)])
+    }
+
+    # Linear interpolation using approx()
+    # Note: CSV is sorted descending by expectation, but approx needs increasing x
+    # So we'll use the c values sorted by expectation ascending
+    sorted_idx <- order(exp_col)
+    approx(
+        x = exp_col[sorted_idx],
+        y = c_col[sorted_idx],
+        xout = failure_rate,
+        method = "linear",
+        rule = 2  # Clamp to boundary values
+    )$y
+}
+
+#' Compute per-satellite c values from failure rates
+#' @param q_gu_vec Vector of failure rates
+#' @return Vector of c values (same length as input)
+compute_per_satellite_c <- function(q_gu_vec) {
+    vapply(q_gu_vec, map_failure_rate_to_c, numeric(1))
+}
+
+#' Compute portfolio-level c as value-weighted average of per-satellite c
+#' @param q_gu_vec Vector of failure rates
+#' @param values_vec Vector of satellite values (for weighting)
+#' @return Numeric: single portfolio-level c
+#' @details ASSUMPTION: Portfolio c = sum(c_i * value_i) / sum(value_i)
+#'          This is a simplification; per-satellite c would be more accurate
+#'          but requires more invasive changes to allocation functions.
+compute_portfolio_c <- function(q_gu_vec, values_vec) {
+    c_per_sat <- compute_per_satellite_c(q_gu_vec)
+    weights <- values_vec / sum(values_vec)
+    sum(c_per_sat * weights, na.rm = TRUE)
+}
+
+# Log the CSV loading
+message(sprintf(
+    "C-parameters CSV loaded: %d rows, c range [%.2f, %.2f], expectation range [%.6f, %.6f]",
+    nrow(c_params_csv),
+    min(c_params_csv$c), max(c_params_csv$c),
+    min(c_params_csv$expectation), max(c_params_csv$expectation)
+))
 
 # --------------------------
 # UI
@@ -229,10 +324,31 @@ ui <- page_sidebar(
             tags$hr(),
             h6("Exposure curve (Swiss Re / MBBEFD)"),
             selectInput(
-            "sr_c",
-            "Swiss Re curve (c)",
-            choices = c("Y1 (c=1.5)" = 1.5, "Y2 (c=2)" = 2, "Y3 (c=3)" = 3, "Y4 (c=4)" = 4, "Lloyd’s-style (c=5)" = 5),
-            selected = 4
+                "c_mode",
+                tip("C-parameter mode", "Auto: derive c from failure rates via CSV lookup. Manual: use dropdown."),
+                choices = c("Auto from CSV" = "auto", "Manual" = "manual"),
+                selected = "manual"
+            ),
+            conditionalPanel(
+                condition = "input.c_mode == 'manual'",
+                selectInput(
+                    "sr_c",
+                    "Swiss Re curve (c)",
+                    choices = c("Y1 (c=1.5)" = 1.5, "Y2 (c=2)" = 2, "Y3 (c=3)" = 3, "Y4 (c=4)" = 4, "Lloyd's-style (c=5)" = 5),
+                    selected = 4
+                )
+            ),
+            conditionalPanel(
+                condition = "input.c_mode == 'auto'",
+                tags$div(
+                    style = "font-size: 0.85rem; color: #6c757d; padding: 0.5rem; background: rgba(0,0,0,0.03); border-radius: 0.5rem;",
+                    tags$p(style = "margin-bottom: 0.25rem;", tags$b("Auto c-parameter:")),
+                    tags$p(style = "margin-bottom: 0;",
+                        "Portfolio c is computed as value-weighted average of per-satellite c values, ",
+                        "where each c_i is derived from q_gu_i via linear interpolation in the CSV."
+                    ),
+                    uiOutput("auto_c_display")
+                )
             ),
             layout_column_wrap(
                 width = 1 / 2,
@@ -967,17 +1083,98 @@ server <- function(input, output, session) {
     # --------------------------------------------------------------------------
     # 3. c_param_lookup()
     # --------------------------------------------------------------------------
-    # Loads and provides lookup for Swiss Re c-parameters from CSV
-    # Source: /home/user/rate-change/c parameters.csv
-    # Returns: Function or data frame mapping c -> expectation
+    # Provides the CSV lookup table and per-satellite c values
+    # Uses the c_params_csv loaded at startup
     # --------------------------------------------------------------------------
     c_param_lookup <- reactive({
-        # STUB: Returns NULL until implemented
-        # Future implementation will:
-        # - Read "c parameters.csv" (columns: c, expectation)
-        # - Provide interpolation function for arbitrary c values
-        # - Cache the lookup table for efficiency
-        NULL
+        # Return the lookup table and helper functions
+        list(
+            lookup_table = c_params_csv,
+            map_fn = map_failure_rate_to_c,
+            per_satellite_fn = compute_per_satellite_c,
+            portfolio_fn = compute_portfolio_c
+        )
+    })
+
+    # --------------------------------------------------------------------------
+    # Helper: per_satellite_c()
+    # --------------------------------------------------------------------------
+    # Computes c values for each satellite based on their failure rates
+    # --------------------------------------------------------------------------
+    per_satellite_c <- reactive({
+        compute_per_satellite_c(q_gu)
+    })
+
+    # --------------------------------------------------------------------------
+    # Helper: portfolio_c()
+    # --------------------------------------------------------------------------
+    # Computes portfolio-level c as value-weighted average
+    # ASSUMPTION: We use base_values (not depreciated) for weighting
+    # --------------------------------------------------------------------------
+    portfolio_c <- reactive({
+        compute_portfolio_c(q_gu, values_base())
+    })
+
+    # --------------------------------------------------------------------------
+    # Helper: effective_c()
+    # --------------------------------------------------------------------------
+    # Returns the c parameter to use based on c_mode:
+    # - "manual": use input$sr_c dropdown
+    # - "auto": use portfolio_c() (value-weighted average from CSV)
+    # --------------------------------------------------------------------------
+    effective_c <- reactive({
+        mode <- input$c_mode
+        if (mode == "manual") {
+            as.numeric(input$sr_c)
+        } else {
+            # Auto mode: use portfolio-level c
+            portfolio_c()
+        }
+    })
+
+    # --------------------------------------------------------------------------
+    # Output: auto_c_display
+    # --------------------------------------------------------------------------
+    # Shows the computed c values when in auto mode
+    # --------------------------------------------------------------------------
+    output$auto_c_display <- renderUI({
+        c_per_sat <- per_satellite_c()
+        port_c <- portfolio_c()
+
+        # Create a mini-table showing per-satellite c
+        sat_df <- data.frame(
+            Satellite = sat_names,
+            q_gu = q_gu,
+            c_i = round(c_per_sat, 3)
+        )
+
+        tags$div(
+            style = "margin-top: 0.5rem;",
+            tags$table(
+                class = "table table-sm",
+                style = "font-size: 0.8rem; margin-bottom: 0.5rem;",
+                tags$thead(
+                    tags$tr(
+                        tags$th("Sat"),
+                        tags$th("q_gu"),
+                        tags$th("c_i")
+                    )
+                ),
+                tags$tbody(
+                    lapply(seq_len(nrow(sat_df)), function(i) {
+                        tags$tr(
+                            tags$td(sat_df$Satellite[i]),
+                            tags$td(sprintf("%.4f%%", sat_df$q_gu[i] * 100)),
+                            tags$td(sprintf("%.3f", sat_df$c_i[i]))
+                        )
+                    })
+                )
+            ),
+            tags$div(
+                style = "font-weight: bold; color: #2c3e50;",
+                sprintf("Portfolio c (value-weighted): %.3f", port_c)
+            )
+        )
     })
 
     # --------------------------------------------------------------------------
@@ -1044,7 +1241,7 @@ server <- function(input, output, session) {
             attachment = input$excess_prior,
             rol = input$rol,
             brokerage = input$brokerage,
-            c_curve = as.numeric(input$sr_c),
+            c_curve = effective_c(),
             q_gu = q_gu
         )
     })
@@ -1056,7 +1253,7 @@ server <- function(input, output, session) {
             attachment = input$excess_curr,
             rol = input$rol,
             brokerage = input$brokerage,
-            c_curve = as.numeric(input$sr_c),
+            c_curve = effective_c(),
             q_gu = q_gu
         )
     })
@@ -1129,9 +1326,10 @@ server <- function(input, output, session) {
         dep1 <- input$dep_curr
 
         # Step states
-        s0 <- calc_scenario(v0, 0, A0, rol, bro, as.numeric(input$sr_c), q_gu)
-        s1 <- calc_scenario(v0, dep1, A0, rol, bro, as.numeric(input$sr_c), q_gu)
-        s2 <- calc_scenario(v0, dep1, A1, rol, bro, as.numeric(input$sr_c), q_gu)
+        cpar <- effective_c()
+        s0 <- calc_scenario(v0, 0, A0, rol, bro, cpar, q_gu)
+        s1 <- calc_scenario(v0, dep1, A0, rol, bro, cpar, q_gu)
+        s2 <- calc_scenario(v0, dep1, A1, rol, bro, cpar, q_gu)
         s3 <- s2
         s4 <- s2
 
@@ -1430,7 +1628,7 @@ server <- function(input, output, session) {
         A0 <- input$excess_prior
         A1 <- input$excess_curr
 
-        cpar <- as.numeric(input$sr_c)
+        cpar <- effective_c()
 
         s0 <- layer_share_from_curve(A0, L0, MPL0, cpar)
         s1 <- layer_share_from_curve(A1, L1, MPL1, cpar)
@@ -1495,7 +1693,7 @@ server <- function(input, output, session) {
             # Curve-implied allocation change % (based on MBBEFD curve)
             vals0 <- values_base()
             vals1 <- vals0 * (1 + input$dep_curr)
-            cpar <- as.numeric(input$sr_c)
+            cpar <- effective_c()
             w0_curve <- alloc_from_curve(vals0, input$excess_prior, prior()$limit, cpar)
             w1_curve <- alloc_from_curve(vals1, input$excess_curr, current()$limit, cpar)
             alloc_curve_chg <- alloc_shift_pct(w0_curve, w1_curve)
