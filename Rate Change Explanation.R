@@ -384,6 +384,7 @@ ui <- page_sidebar(
             id = "lloyds_accordion",
             accordion_panel(
                 title = tagList(icon("clock-rotate-left"), " Prior Year (optional)"),
+                value = "prior_year",
                 tags$div(
                     style = "font-size: 0.92rem;",
                     tags$p(
@@ -443,6 +444,7 @@ ui <- page_sidebar(
             ),
             accordion_panel(
                 title = tagList(icon("calculator"), " Rerated View (current method)"),
+                value = "rerated_view",
                 tags$div(
                     style = "font-size: 0.92rem;",
                     tags$p(
@@ -499,6 +501,7 @@ ui <- page_sidebar(
             ),
             accordion_panel(
                 title = tagList(icon("chart-waterfall"), " PMDR Adjustments"),
+                value = "pmdr_adjustments",
                 tags$div(
                     style = "font-size: 0.92rem;",
                     tags$p(
@@ -530,6 +533,7 @@ ui <- page_sidebar(
             ),
             accordion_panel(
                 title = tagList(icon("table"), " Lloyd's Decomposition (verification)"),
+                value = "lloyds_decomposition",
                 tags$div(
                     style = "font-size: 0.92rem;",
                     tags$p(
