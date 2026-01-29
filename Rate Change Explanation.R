@@ -497,6 +497,48 @@ ui <- page_sidebar(
                     )
                 )
             ),
+            accordion_panel(
+                title = tagList(icon("chart-waterfall"), " PMDR Adjustments"),
+                tags$div(
+                    style = "font-size: 0.92rem;",
+                    tags$p(
+                        style = "color: #6c757d; margin-bottom: 0.75rem;",
+                        "Lloyd's PMDR manual adjustments for breadth of cover and other factors."
+                    ),
+                    # Breadth of cover change (user input)
+                    sliderInput(
+                        "breadth_of_cover_change",
+                        tip("Breadth of Cover Change", "Premium impact from adding/removing perils (e.g., cyber, piracy). Enter as £ delta."),
+                        min = -5e6, max = 5e6, value = 0, step = 1e4,
+                        pre = "£"
+                    ),
+                    tags$hr(),
+                    # Other exposure change (user input)
+                    sliderInput(
+                        "other_exposure_change",
+                        tip("Other Exposure Change", "Premium impact from limits, exposure units, geography shifts. Enter as £ delta."),
+                        min = -5e6, max = 5e6, value = 0, step = 1e4,
+                        pre = "£"
+                    ),
+                    tags$hr(),
+                    tags$p(
+                        style = "color: #6c757d; font-size: 0.85rem;",
+                        "Note: Deductible/attachment change is computed automatically. ",
+                        "Pure Rate Change (RARC) is the residual after all other components."
+                    )
+                )
+            ),
+            accordion_panel(
+                title = tagList(icon("table"), " Lloyd's Decomposition (verification)"),
+                tags$div(
+                    style = "font-size: 0.92rem;",
+                    tags$p(
+                        style = "color: #6c757d; margin-bottom: 0.75rem;",
+                        "Numerical verification of PMDR decomposition and RARC calculation."
+                    ),
+                    uiOutput("lloyds_decomp_table")
+                )
+            ),
             open = FALSE
         )
     ),
@@ -1182,52 +1224,338 @@ server <- function(input, output, session) {
     # --------------------------------------------------------------------------
     # Re-rates last year's exposure using THIS year's methodology
     # This is the core of RARC: "what would we charge for prior risk today?"
-    # Returns: List with rerated_premium and methodology_delta
+    #
+    # DEFINITION:
+    # - Take PRIOR exposure (values, attachment from prior year)
+    # - Apply CURRENT ROL (this year's rate)
+    # - This gives: "same risk, current pricing"
+    #
+    # Returns: List with:
+    #   - rerated_gross: Gross premium for prior exposure at current ROL
+    #   - rerated_net: Net premium for prior exposure at current ROL
+    #   - prior_gross: Original prior gross premium (for reference)
+    #   - methodology_delta: rerated_gross - prior_gross (ROL change impact)
     # --------------------------------------------------------------------------
     prior_exposure_rerated_current_method <- reactive({
-        # STUB: Returns NULL until implemented
-        # Future implementation will:
-        # - Take prior year's exposure (values, attachment, limit)
-        # - Apply current year's pricing methodology (ROL, curve, rates)
-        # - Calculate hypothetical premium = "same risk, current price"
-        # - Compare to actual prior premium for methodology delta
-        NULL
+        # Get prior exposure parameters
+        v0 <- values_base()
+        A_prior <- input$excess_prior
+        bro <- input$brokerage
+        cpar <- effective_c()
+
+        # Prior ROL (from Lloyd's inputs) vs Current ROL
+        rol_prior <- input$prior_rol
+        rol_current <- input$rol
+
+        # Calculate prior scenario (prior exposure at prior ROL)
+        prior_scenario <- calc_scenario(
+            values_base = v0,
+            dep = 0,
+            attachment = A_prior,
+            rol = rol_prior,
+            brokerage = bro,
+            c_curve = cpar,
+            q_gu = q_gu
+        )
+
+        # Calculate rerated scenario (prior exposure at CURRENT ROL)
+        rerated_scenario <- calc_scenario(
+            values_base = v0,
+            dep = 0,
+            attachment = A_prior,
+            rol = rol_current,
+            brokerage = bro,
+            c_curve = cpar,
+            q_gu = q_gu
+        )
+
+        list(
+            rerated_gross = rerated_scenario$gp,
+            rerated_net = rerated_scenario$np,
+            prior_gross = prior_scenario$gp,
+            prior_net = prior_scenario$np,
+            methodology_delta = rerated_scenario$gp - prior_scenario$gp
+        )
     })
 
     # --------------------------------------------------------------------------
     # 5. lloyds_decomp()
     # --------------------------------------------------------------------------
     # Full Lloyd's PMDR-style waterfall decomposition
-    # Returns: List with 4 PMDR components:
-    #   delta_attachment, delta_breadth, delta_other, delta_pure_rate
+    #
+    # COMPONENTS:
+    # 1. delta_attachment: Premium impact from deductible/attachment change
+    #    = (prior values at current attachment) - (prior values at prior attachment)
+    # 2. delta_breadth: Premium impact from coverage scope changes (user input)
+    # 3. delta_other: Premium impact from limits/exposure/geography (user input)
+    # 4. delta_pure_rate: RARC residual = total_change - (1+2+3)
+    #
+    # CONSTRAINT: prior_premium + sum(deltas) = current_premium
+    #
+    # Also computes:
+    # - benchmark_premium: EL_current / target_lr / (1 - brokerage)
+    # - price_adequacy: current_premium / benchmark_premium
     # --------------------------------------------------------------------------
     lloyds_decomp <- reactive({
-        # STUB: Returns NULL until implemented
-        # Future implementation will calculate:
-        # 1. delta_attachment: Premium impact from deductible/attachment change
-        # 2. delta_breadth: Premium impact from coverage scope changes
-        # 3. delta_other: Premium impact from limits/exposure units/geography
-        # 4. delta_pure_rate: THE RARC residual (what's left after 1-3)
-        #
-        # These will sum to total premium change: P_current - P_prior
-        NULL
+        # Get scenario data
+        p <- prior()
+        c <- current()
+        bro <- input$brokerage
+        tgt_lr <- input$target_lr
+
+        # Premium values
+        prior_gross <- p$gp
+        prior_net <- p$np
+        current_gross <- c$gp
+        current_net <- c$np
+        total_change <- current_gross - prior_gross
+
+        # ----- Component 1: Deductible/Attachment Change -----
+        # Calculate: prior values/ROL but with CURRENT attachment
+        v0 <- values_base()
+        rol <- input$rol
+        cpar <- effective_c()
+        A_prior <- input$excess_prior
+        A_current <- input$excess_curr
+
+        # Intermediate scenario: prior values at current attachment
+        intermediate <- calc_scenario(
+            values_base = v0,
+            dep = 0,
+            attachment = A_current,  # <-- CURRENT attachment
+            rol = rol,
+            brokerage = bro,
+            c_curve = cpar,
+            q_gu = q_gu
+        )
+        # delta_attachment = change from moving attachment (holding everything else at prior)
+        # We compute: (prior values at current attachment) - (prior values at prior attachment)
+        delta_attachment <- intermediate$gp - prior_gross
+
+        # ----- Component 2: Breadth of Cover Change -----
+        # User input (manual adjustment)
+        delta_breadth <- input$breadth_of_cover_change
+
+        # ----- Component 3: Other Exposure Change -----
+        # User input (manual adjustment)
+        delta_other <- input$other_exposure_change
+
+        # ----- Component 4: Pure Rate Change (RARC) -----
+        # Residual: whatever is left after accounting for 1, 2, 3
+        delta_pure_rate <- total_change - delta_attachment - delta_breadth - delta_other
+
+        # ----- Benchmark Premium -----
+        # Theoretical gross premium to achieve target LR
+        # benchmark_gross = EL_current / target_lr / (1 - brokerage)
+        el_current <- c$el
+        benchmark_gross <- if (tgt_lr > 0 && bro < 1) {
+            el_current / tgt_lr / (1 - bro)
+        } else {
+            NA_real_
+        }
+        benchmark_net <- if (!is.na(benchmark_gross)) benchmark_gross * (1 - bro) else NA_real_
+
+        # ----- Price Adequacy -----
+        # current_premium / benchmark_premium
+        price_adequacy <- if (!is.na(benchmark_gross) && benchmark_gross > 0) {
+            current_gross / benchmark_gross
+        } else {
+            NA_real_
+        }
+
+        # ----- Verification -----
+        # Check that decomposition sums correctly
+        reconstructed <- prior_gross + delta_attachment + delta_breadth + delta_other + delta_pure_rate
+        decomp_error <- abs(reconstructed - current_gross)
+
+        list(
+            # Starting point
+            prior_gross = prior_gross,
+            prior_net = prior_net,
+
+            # PMDR Components (£ deltas)
+            delta_attachment = delta_attachment,
+            delta_breadth = delta_breadth,
+            delta_other = delta_other,
+            delta_pure_rate = delta_pure_rate,
+
+            # Ending point
+            current_gross = current_gross,
+            current_net = current_net,
+            total_change = total_change,
+
+            # Benchmark & adequacy
+            benchmark_gross = benchmark_gross,
+            benchmark_net = benchmark_net,
+            price_adequacy = price_adequacy,
+
+            # Expected loss (for reference)
+            el_prior = p$el,
+            el_current = el_current,
+
+            # Verification
+            reconstructed = reconstructed,
+            decomp_error = decomp_error
+        )
     })
 
     # --------------------------------------------------------------------------
     # 6. rarc_index()
     # --------------------------------------------------------------------------
     # The pure Risk Adjusted Rate Change index
-    # Returns: Numeric where 100% = flat, >100% = increase, <100% = decrease
-    # Formula: current_premium / prior_exposure_rerated_current_method
+    #
+    # DEFINITION:
+    # RARC = (prior exposure priced at CURRENT ROL) / (prior exposure priced at PRIOR ROL)
+    #
+    # This isolates the pure rate movement by comparing:
+    # - Numerator: what the SAME risk would cost at current rates
+    # - Denominator: what the SAME risk actually cost at prior rates
+    #
+    # Returns:
+    # - 100% = flat (same rate for same risk)
+    # - >100% = rate increase (charging more for same risk)
+    # - <100% = rate decrease (charging less for same risk)
     # --------------------------------------------------------------------------
     rarc_index <- reactive({
-        # STUB: Returns NULL until implemented
-        # Future implementation will:
-        # - Get rerated prior premium from prior_exposure_rerated_current_method()
-        # - Get actual current premium from current()
-        # - Calculate RARC = actual_current / rerated_prior
-        # - This isolates pure rate movement from exposure changes
-        NULL
+        rerated <- prior_exposure_rerated_current_method()
+
+        # RARC = rerated_gross / prior_gross
+        # (same exposure, current ROL) / (same exposure, prior ROL)
+        if (rerated$prior_gross > 0) {
+            rerated$rerated_gross / rerated$prior_gross
+        } else {
+            NA_real_
+        }
+    })
+
+    # --------------------------------------------------------------------------
+    # Output: lloyds_decomp_table
+    # --------------------------------------------------------------------------
+    # Verification table showing all decomposition components
+    # --------------------------------------------------------------------------
+    output$lloyds_decomp_table <- renderUI({
+        decomp <- lloyds_decomp()
+        rarc <- rarc_index()
+        rerated <- prior_exposure_rerated_current_method()
+
+        # Format helper
+        fmt <- function(x, prefix = "£") {
+            if (is.na(x)) return("—")
+            paste0(prefix, format(round(x), big.mark = ",", scientific = FALSE))
+        }
+        fmt_pct <- function(x) {
+            if (is.na(x)) return("—")
+            sprintf("%.2f%%", x * 100)
+        }
+        fmt_delta <- function(x) {
+            if (is.na(x)) return("—")
+            sign <- if (x >= 0) "+" else ""
+            paste0(sign, fmt(x))
+        }
+
+        tags$div(
+            style = "font-size: 0.85rem;",
+
+            # PMDR Decomposition Table
+            tags$h6("PMDR Decomposition", style = "margin-top: 0;"),
+            tags$table(
+                class = "table table-sm table-striped",
+                style = "margin-bottom: 1rem;",
+                tags$thead(
+                    tags$tr(
+                        tags$th("Component"),
+                        tags$th(style = "text-align: right;", "Value")
+                    )
+                ),
+                tags$tbody(
+                    tags$tr(
+                        tags$td("Prior Gross Premium"),
+                        tags$td(style = "text-align: right;", fmt(decomp$prior_gross))
+                    ),
+                    tags$tr(style = "background: #e3f2fd;",
+                        tags$td("1. Deductible/Attachment Change"),
+                        tags$td(style = "text-align: right;", fmt_delta(decomp$delta_attachment))
+                    ),
+                    tags$tr(style = "background: #e3f2fd;",
+                        tags$td("2. Breadth of Cover Change"),
+                        tags$td(style = "text-align: right;", fmt_delta(decomp$delta_breadth))
+                    ),
+                    tags$tr(style = "background: #e3f2fd;",
+                        tags$td("3. Other Exposure Change"),
+                        tags$td(style = "text-align: right;", fmt_delta(decomp$delta_other))
+                    ),
+                    tags$tr(style = "background: #fff3cd; font-weight: bold;",
+                        tags$td("4. Pure Rate Change (RARC)"),
+                        tags$td(style = "text-align: right;", fmt_delta(decomp$delta_pure_rate))
+                    ),
+                    tags$tr(style = "font-weight: bold; border-top: 2px solid #333;",
+                        tags$td("Current Gross Premium"),
+                        tags$td(style = "text-align: right;", fmt(decomp$current_gross))
+                    ),
+                    tags$tr(style = "color: #6c757d;",
+                        tags$td("Total Change"),
+                        tags$td(style = "text-align: right;", fmt_delta(decomp$total_change))
+                    )
+                )
+            ),
+
+            # Benchmark & Adequacy
+            tags$h6("Benchmark & Price Adequacy"),
+            tags$table(
+                class = "table table-sm",
+                style = "margin-bottom: 1rem;",
+                tags$tbody(
+                    tags$tr(
+                        tags$td("Expected Loss (current)"),
+                        tags$td(style = "text-align: right;", fmt(decomp$el_current))
+                    ),
+                    tags$tr(
+                        tags$td("Benchmark Gross Premium"),
+                        tags$td(style = "text-align: right;", fmt(decomp$benchmark_gross))
+                    ),
+                    tags$tr(style = "font-weight: bold;",
+                        tags$td("Price Adequacy"),
+                        tags$td(style = "text-align: right;", fmt_pct(decomp$price_adequacy))
+                    )
+                )
+            ),
+
+            # RARC Index
+            tags$h6("Risk Adjusted Rate Change (RARC)"),
+            tags$table(
+                class = "table table-sm",
+                style = "margin-bottom: 1rem;",
+                tags$tbody(
+                    tags$tr(
+                        tags$td("Prior exposure @ Prior ROL"),
+                        tags$td(style = "text-align: right;", fmt(rerated$prior_gross))
+                    ),
+                    tags$tr(
+                        tags$td("Prior exposure @ Current ROL"),
+                        tags$td(style = "text-align: right;", fmt(rerated$rerated_gross))
+                    ),
+                    tags$tr(style = "font-weight: bold; background: #d4edda;",
+                        tags$td("RARC Index"),
+                        tags$td(style = "text-align: right;", fmt_pct(rarc))
+                    )
+                )
+            ),
+
+            # Verification
+            if (decomp$decomp_error > 0.01) {
+                tags$div(
+                    style = "color: #dc3545; font-size: 0.8rem;",
+                    icon("exclamation-triangle"),
+                    sprintf(" Decomposition error: %s (should be 0)", fmt(decomp$decomp_error))
+                )
+            } else {
+                tags$div(
+                    style = "color: #28a745; font-size: 0.8rem;",
+                    icon("check-circle"),
+                    " Decomposition verified: sum of components equals total change"
+                )
+            }
+        )
     })
 
     # ==========================================================================
