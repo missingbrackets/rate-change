@@ -1,0 +1,12 @@
+Instructions for what is needed with rate change:
+In Lloyd’s terminology, rate change primarily refers to the Risk Adjusted Rate Change (RARC), which measures the underlying movement in price after stripping out changes in risk exposure, terms, and conditions. It is the standard metric used to track whether a syndicate is getting "more or less money for the same risk" compared to the prior year. 
+Core Concepts
+Risk Adjusted Rate Change (RARC): This measures the price difference between what was charged this year and what would have been charged last year for the exact same risk. It is typically net of claims inflation to show the true impact on expected loss ratios.
+Benchmark Price: The theoretical gross premium required to achieve the loss ratio set in the approved Syndicate Business Forecast (SBF).
+Price Adequacy: A comparison of the achieved price against the benchmark price to ensure the business written will meet profitability targets. 
+What is Reported?
+Syndicates must submit a monthly Performance Management Data Return (PMDR) that breaks down premium movements into four key components: 
+Change in Deductible / Attachment Point: Premium impact due to shifts in the risk retention level.
+Change in Breadth of Cover: Premium movement caused by adding or removing perils (e.g., adding cyber or piracy coverage).
+Other Factors: Includes changes in limits, exposure units (e.g., more ships or higher turnover), or geographic shifts.
+Pure Rate Change: The "residual" movement—this is the RARC. It represents the price change not explained by the exposure adjustments above. 
