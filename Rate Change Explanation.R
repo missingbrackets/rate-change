@@ -594,32 +594,40 @@ ui <- page_sidebar(
             gap = "1rem",
             card(
                 full_screen = TRUE,
-                card_header(tagList(icon("chart-bar"), "Pricing & allocation bridge (percent)")),
+                card_header(tagList(icon("chart-bar"), "Lloyd's Rate Change Analysis")),
 
                 navset_tab(
                     nav_panel(
-                    "Percent bridge",
-                    plotlyOutput("pct_bridge", height = 360),
-                    tags$div(
-                        style = "font-size:0.95rem; color:#5a6b7b;",
-                        "Compares booked premium base (limit) change vs allocation shift and EL change."
-                    )
+                        "PMDR Waterfall",
+                        plotlyOutput("lloyds_waterfall", height = 360),
+                        tags$div(
+                            style = "font-size:0.95rem; color:#5a6b7b;",
+                            "Lloyd's PMDR decomposition: Prior → Deductible → Breadth → Other → Pure Rate → Current"
+                        )
                     ),
                     nav_panel(
-                    "MBBEFD exposure curve",
-                    plotlyOutput("ec_curve", height = 360),
-                    tags$div(
-                        style = "font-size:0.95rem; color:#5a6b7b;",
-                        "Two points per scenario: (Attachment/MPL, G(d)) and ((Attachment+Limit)/MPL, G(u)). ",
-                        "Layer share is G(u)−G(d)."
-                    )
+                        "Loss vs Premium",
+                        plotlyOutput("loss_premium_comparison", height = 360),
+                        tags$div(
+                            style = "font-size:0.95rem; color:#5a6b7b;",
+                            "Side-by-side comparison of Expected Loss, Premium, Loss Ratio, and Benchmark."
+                        )
+                    ),
+                    nav_panel(
+                        "MBBEFD exposure curve",
+                        plotlyOutput("ec_curve", height = 360),
+                        tags$div(
+                            style = "font-size:0.95rem; color:#5a6b7b;",
+                            "Two points per scenario: (Attachment/MPL, G(d)) and ((Attachment+Limit)/MPL, G(u)). ",
+                            "Layer share is G(u)−G(d)."
+                        )
                     )
                 )
-                ),
+            ),
             card(
                 full_screen = TRUE,
-                card_header(tagList(icon("gauge-high"), "Rate change index")),
-                plotlyOutput("gauge", height = 270)
+                card_header(tagList(icon("gauge-high"), "RARC (Pure Rate Change) Index")),
+                plotlyOutput("rarc_gauge", height = 270)
             )
         ),
 
@@ -1728,38 +1736,72 @@ server <- function(input, output, session) {
         p
     })
 
-    # Gauge
-    output$gauge <- renderPlotly({
+    # RARC Gauge (Pure Rate Change Index)
+    output$rarc_gauge <- renderPlotly({
+        rarc <- rarc_index()
 
-        lr_prior   <- prior()$lr
-        lr_current <- current()$lr
+        # Convert to percentage
+        rarc_pct <- ifelse(is.na(rarc), NA_real_, rarc * 100)
 
-        idx <- ifelse(is.na(lr_prior) || lr_prior == 0, NA_real_, lr_current / lr_prior)
+        # Label based on rate change direction
+        label <- if (is.na(rarc)) {
+            "—"
+        } else if (rarc > 1.005) {
+            "Rate Increase"
+        } else if (rarc < 0.995) {
+            "Rate Decrease"
+        } else {
+            "Flat Rate"
+        }
 
-        label <- ifelse(
-            is.na(idx), "—",
-            ifelse(idx < 1, "Improvement", ifelse(abs(idx - 1) < 0.0005, "Flat", "Deterioration"))
-        )
+        # Color based on direction (from insurer perspective, increase = good)
+        bar_color <- if (is.na(rarc)) {
+            "#6c757d"
+        } else if (rarc >= 1) {
+            "#28a745"  # green for rate increase
+        } else {
+            "#dc3545"  # red for rate decrease
+        }
 
         plot_ly(
             type = "indicator",
             mode = "gauge+number+delta",
-            value = ifelse(is.na(idx), 0, 100 * idx),
+            value = ifelse(is.na(rarc_pct), 100, rarc_pct),
             number = list(suffix = "%", valueformat = ".1f"),
             delta = list(reference = 100, valueformat = ".1f", suffix = " pts"),
-            title = list(text = paste0("Loss Ratio Index (Current / Prior) — ", label)),
+            title = list(
+                text = paste0("<b>RARC Index</b><br><span style='font-size:0.8em;color:#666'>", label, "</span>"),
+                font = list(size = 14)
+            ),
             gauge = list(
-            axis = list(range = list(60, 140)),
-            threshold = list(line = list(width = 4), thickness = 0.85, value = 100),
-            steps = list(
-                list(range = c(60, 100), color = "#d4edda"),  # green zone
-                list(range = c(100, 120), color = "#fff3cd"), # amber
-                list(range = c(120, 140), color = "#f8d7da")  # red
-            )
+                axis = list(range = list(80, 120), ticksuffix = "%"),
+                bar = list(color = bar_color),
+                threshold = list(
+                    line = list(color = "#333", width = 4),
+                    thickness = 0.85,
+                    value = 100
+                ),
+                steps = list(
+                    list(range = c(80, 95), color = "#f8d7da"),   # red zone (rate decrease)
+                    list(range = c(95, 100), color = "#fff3cd"),  # amber (slight decrease)
+                    list(range = c(100, 105), color = "#d4edda"), # light green (slight increase)
+                    list(range = c(105, 120), color = "#28a745")  # green (rate increase)
+                )
             )
         ) %>%
-            layout(margin = list(l = 30, r = 30, t = 40, b = 10))
-        })
+            layout(
+                margin = list(l = 30, r = 30, t = 60, b = 10),
+                annotations = list(
+                    list(
+                        x = 0.5, y = -0.15,
+                        xref = "paper", yref = "paper",
+                        text = "RARC = (Prior exposure @ Current ROL) / (Prior exposure @ Prior ROL)",
+                        showarrow = FALSE,
+                        font = list(size = 10, color = "#666")
+                    )
+                )
+            )
+    })
 
     # Mechanics panel (dynamic bullets) + dominant driver
     output$mechanics <- renderUI({
@@ -2003,52 +2045,204 @@ server <- function(input, output, session) {
             )
         })
 
-        output$pct_bridge <- renderPlotly({
-            # Booked premium base change (limit) %
-            p_lim <- prior()$limit
-            c_lim <- current()$limit
-            prem_base_chg <- ifelse(p_lim <= 0, NA_real_, (c_lim / p_lim) - 1)
+        # ==========================================================================
+        # Lloyd's PMDR Waterfall Chart
+        # ==========================================================================
+        output$lloyds_waterfall <- renderPlotly({
+            decomp <- lloyds_decomp()
 
-            # Allocation change % (chosen allocation view)
-            w0 <- prior()$w_curve
-            w1 <- current()$w_curve
-            alloc_chg <- alloc_shift_pct(w0, w1)
+            # Format helper for labels
+            fmt_label <- function(x) {
+                if (is.na(x)) return("—")
+                prefix <- if (x >= 0) "+" else ""
+                paste0(prefix, "£", format(round(x / 1e6, 2), nsmall = 2), "m")
+            }
 
-            share0 <- sum(prior()$shares * prior()$values) / sum(prior()$values)   # value-weighted avg share
-            share1 <- sum(current()$shares * current()$values) / sum(current()$values)
-            alloc_chg <- ifelse(share0 <= 0, NA_real_, (share1 / share0) - 1)
+            fmt_pct <- function(x, base) {
+                if (is.na(x) || is.na(base) || base == 0) return("")
+                pct <- x / base * 100
+                prefix <- if (pct >= 0) "+" else ""
+                paste0("(", prefix, sprintf("%.1f%%", pct), ")")
+            }
 
-            # Curve-implied allocation change % (based on MBBEFD curve)
-            vals0 <- values_base()
-            vals1 <- vals0 * (1 + input$dep_curr)
-            cpar <- effective_c()
-            w0_curve <- alloc_from_curve(vals0, input$excess_prior, prior()$limit, cpar)
-            w1_curve <- alloc_from_curve(vals1, input$excess_curr, current()$limit, cpar)
-            alloc_curve_chg <- alloc_shift_pct(w0_curve, w1_curve)
-
-            # Expected loss change %
-            p_el <- prior()$el
-            c_el <- current()$el
-            el_chg <- ifelse(p_el <= 0, NA_real_, (c_el / p_el) - 1)
-
-            df <- data.frame(
-                metric = c("Booked premium base (Limit)", "Chosen allocation shift", "Curve-implied allocation shift", "Expected loss (EL)"),
-                pct = c(prem_base_chg, alloc_chg, alloc_curve_chg, el_chg)
-        )
-
-        plot_ly(
-            df,
-            x = ~metric,
-            y = ~pct,
-            type = "bar",
-            hovertext = ~paste0(metric, "<br>", sprintf("%+.1f%%", 100*pct)),
-            hoverinfo = "text"
-        ) %>%
-            layout(
-            yaxis = list(title = "Change vs prior", tickformat = ".0%"),
-            xaxis = list(title = ""),
-            margin = list(l = 60, r = 20, t = 10, b = 90)
+            # Build waterfall data
+            # Steps: Prior -> Deductible -> Breadth -> Other -> Pure Rate -> Current
+            steps <- c(
+                "Prior<br>Premium",
+                "1. Deductible/<br>Attachment",
+                "2. Breadth<br>of Cover",
+                "3. Other<br>Factors",
+                "4. Pure Rate<br>Change",
+                "Current<br>Premium"
             )
+
+            # Values for waterfall
+            values <- c(
+                decomp$prior_gross,                # absolute start
+                decomp$delta_attachment,           # relative
+                decomp$delta_breadth,              # relative
+                decomp$delta_other,                # relative
+                decomp$delta_pure_rate,            # relative
+                decomp$current_gross               # absolute end (total)
+            )
+
+            measure <- c("absolute", "relative", "relative", "relative", "relative", "total")
+
+            # Text labels (inside bars)
+            text_labels <- c(
+                paste0("£", format(round(decomp$prior_gross / 1e6, 2), nsmall = 2), "m"),
+                paste0(fmt_label(decomp$delta_attachment), "<br>", fmt_pct(decomp$delta_attachment, decomp$prior_gross)),
+                paste0(fmt_label(decomp$delta_breadth), "<br>", fmt_pct(decomp$delta_breadth, decomp$prior_gross)),
+                paste0(fmt_label(decomp$delta_other), "<br>", fmt_pct(decomp$delta_other, decomp$prior_gross)),
+                paste0(fmt_label(decomp$delta_pure_rate), "<br>", fmt_pct(decomp$delta_pure_rate, decomp$prior_gross)),
+                paste0("£", format(round(decomp$current_gross / 1e6, 2), nsmall = 2), "m")
+            )
+
+            # Hover text
+            hover_text <- c(
+                paste0("Prior Gross Premium: £", format(round(decomp$prior_gross), big.mark = ",")),
+                paste0("Deductible/Attachment Change: £", format(round(decomp$delta_attachment), big.mark = ","),
+                       "<br>", fmt_pct(decomp$delta_attachment, decomp$prior_gross), " of prior"),
+                paste0("Breadth of Cover Change: £", format(round(decomp$delta_breadth), big.mark = ","),
+                       "<br>", fmt_pct(decomp$delta_breadth, decomp$prior_gross), " of prior"),
+                paste0("Other Exposure Change: £", format(round(decomp$delta_other), big.mark = ","),
+                       "<br>", fmt_pct(decomp$delta_other, decomp$prior_gross), " of prior"),
+                paste0("Pure Rate Change (RARC): £", format(round(decomp$delta_pure_rate), big.mark = ","),
+                       "<br>", fmt_pct(decomp$delta_pure_rate, decomp$prior_gross), " of prior"),
+                paste0("Current Gross Premium: £", format(round(decomp$current_gross), big.mark = ","))
+            )
+
+            # Colors: blue for start/end, green for increase, red for decrease
+            colors <- c(
+                "#2c3e50",  # Prior (dark blue)
+                ifelse(decomp$delta_attachment >= 0, "#27ae60", "#e74c3c"),
+                ifelse(decomp$delta_breadth >= 0, "#27ae60", "#e74c3c"),
+                ifelse(decomp$delta_other >= 0, "#27ae60", "#e74c3c"),
+                ifelse(decomp$delta_pure_rate >= 0, "#27ae60", "#e74c3c"),
+                "#2c3e50"   # Current (dark blue)
+            )
+
+            plot_ly(
+                type = "waterfall",
+                x = steps,
+                y = values,
+                measure = measure,
+                text = text_labels,
+                textposition = "inside",
+                textfont = list(color = "white", size = 10),
+                hovertext = hover_text,
+                hoverinfo = "text",
+                connector = list(line = list(color = "#aaa", width = 1)),
+                increasing = list(marker = list(color = "#27ae60")),
+                decreasing = list(marker = list(color = "#e74c3c")),
+                totals = list(marker = list(color = "#2c3e50"))
+            ) %>%
+                layout(
+                    title = list(
+                        text = "<b>Lloyd's PMDR Premium Decomposition</b>",
+                        font = list(size = 14),
+                        x = 0.5
+                    ),
+                    xaxis = list(
+                        title = "",
+                        tickfont = list(size = 10)
+                    ),
+                    yaxis = list(
+                        title = "Gross Premium (£)",
+                        tickformat = ",.0f",
+                        tickprefix = "£"
+                    ),
+                    margin = list(l = 80, r = 20, t = 50, b = 80),
+                    showlegend = FALSE
+                )
+        })
+
+        # ==========================================================================
+        # Loss Cost vs Premium Comparison Chart
+        # ==========================================================================
+        output$loss_premium_comparison <- renderPlotly({
+            decomp <- lloyds_decomp()
+            p <- prior()
+            c <- current()
+
+            # Build comparison data
+            metrics <- c("Expected Loss", "Gross Premium", "Net Premium", "Benchmark Premium")
+
+            prior_vals <- c(
+                decomp$el_prior,
+                decomp$prior_gross,
+                decomp$prior_net,
+                decomp$benchmark_gross  # Use same benchmark for comparison
+            )
+
+            current_vals <- c(
+                decomp$el_current,
+                decomp$current_gross,
+                decomp$current_net,
+                decomp$benchmark_gross
+            )
+
+            # Calculate changes
+            changes <- ifelse(prior_vals > 0, (current_vals / prior_vals - 1) * 100, NA_real_)
+
+            # Create grouped bar chart
+            plot_ly() %>%
+                add_bars(
+                    x = metrics,
+                    y = prior_vals / 1e6,
+                    name = "Prior",
+                    marker = list(color = "#3498db"),
+                    text = paste0("£", round(prior_vals / 1e6, 2), "m"),
+                    textposition = "outside",
+                    hovertext = paste0(metrics, " (Prior): £", format(round(prior_vals), big.mark = ",")),
+                    hoverinfo = "text"
+                ) %>%
+                add_bars(
+                    x = metrics,
+                    y = current_vals / 1e6,
+                    name = "Current",
+                    marker = list(color = "#e74c3c"),
+                    text = paste0("£", round(current_vals / 1e6, 2), "m"),
+                    textposition = "outside",
+                    hovertext = paste0(metrics, " (Current): £", format(round(current_vals), big.mark = ",")),
+                    hoverinfo = "text"
+                ) %>%
+                layout(
+                    title = list(
+                        text = "<b>Prior vs Current: Loss & Premium Comparison</b>",
+                        font = list(size = 14),
+                        x = 0.5
+                    ),
+                    xaxis = list(title = ""),
+                    yaxis = list(
+                        title = "Value (£m)",
+                        tickformat = ",.1f",
+                        tickprefix = "£",
+                        ticksuffix = "m"
+                    ),
+                    barmode = "group",
+                    legend = list(
+                        orientation = "h",
+                        x = 0.5,
+                        xanchor = "center",
+                        y = -0.15
+                    ),
+                    margin = list(l = 70, r = 20, t = 50, b = 70),
+                    annotations = list(
+                        # Add loss ratio annotations
+                        list(
+                            x = 0.5, y = 1.08,
+                            xref = "paper", yref = "paper",
+                            text = paste0(
+                                "Loss Ratio: Prior ", sprintf("%.1f%%", p$lr * 100),
+                                " → Current ", sprintf("%.1f%%", c$lr * 100),
+                                " | Price Adequacy: ", sprintf("%.1f%%", decomp$price_adequacy * 100)
+                            ),
+                            showarrow = FALSE,
+                            font = list(size = 11, color = "#666")
+                        )
+                    )
+                )
         })
 }
 
