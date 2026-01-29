@@ -72,6 +72,7 @@ library(dplyr)
 library(scales)
 library(ggplot2)
 library(plotly)
+library(mbbefd)
 
 # --------------------------
 # Helpers
@@ -293,10 +294,10 @@ theme <- bs_theme(
 )
 
 ui <- page_sidebar(
-    title = "Satellite Layer Pricing Story",
+    title = "Satellite rate Change",
     theme = theme,
     sidebar = sidebar(
-        width = 420,
+        width = 520,
         card(
             card_header(tagList(icon("sliders"), "Deal Inputs")),
             layout_column_wrap(
@@ -307,6 +308,8 @@ ui <- page_sidebar(
             tags$hr(),
             h6("Portfolio / Schedule"),
             DTOutput("schedule_tbl"),
+            h6("Value depreciation (Current)"),
+            sliderInput("dep_curr", "Depreciation", min = -0.40, max = 0, value = -0.15, step = 0.01),
             tags$hr(),
             h6("Pricing terms"),
             sliderInput("rol", "Rate on Line (ROL)", min = 0.0025, max = 0.03, value = 0.0105, step = 0.0001),
@@ -317,8 +320,6 @@ ui <- page_sidebar(
             sliderInput("excess_prior", "Prior excess (attachment)", min = 0, max = 8e9, value = 5e9, step = 0.1e9),
             sliderInput("excess_curr", "Current excess (attachment)", min = 0, max = 8e9, value = 5.5e9, step = 0.1e9),
             tags$hr(),
-            h6("Value depreciation (Current)"),
-            sliderInput("dep_curr", "Depreciation", min = -0.40, max = 0, value = -0.15, step = 0.01),
             tags$hr(),
             h6("Exposure curve / layer allocation"),
             tags$hr(),
@@ -519,10 +520,14 @@ ui <- page_sidebar(
                     # Other exposure change (user input)
                     sliderInput(
                         "other_exposure_change",
-                        tip("Other Exposure Change", "Premium impact from limits, exposure units, geography shifts. Enter as £ delta."),
+                        tip(
+                            "Other Exposure Change (manual adjustment)",
+                            "Manual premium adjustment for limits, exposure units, geography shifts. Auto exposure impact is shown below."
+                        ),
                         min = -5e6, max = 5e6, value = 0, step = 1e4,
                         pre = "£"
                     ),
+                    uiOutput("auto_other_exposure_change"),
                     tags$hr(),
                     tags$p(
                         style = "color: #6c757d; font-size: 0.85rem;",
@@ -731,12 +736,18 @@ ui <- page_sidebar(
 server <- function(input, output, session) {
     # Schedule table state
     schedule <- reactiveVal(
-        data.frame(Satellite = sat_names, BaseValue = base_values, stringsAsFactors = FALSE)
+        data.frame(
+            Satellite = sat_names,
+            PriorExposure = base_values,
+            CurrentExposure = base_values,
+            stringsAsFactors = FALSE
+        )
     )
-
+    
     output$schedule_tbl <- renderDT({
         datatable(
             schedule(),
+            colnames = c("Satellite", "Prior Exposure", "Current Exposure"),
             rownames = FALSE,
             options = list(
                 dom = "t",
@@ -745,7 +756,8 @@ server <- function(input, output, session) {
             ),
             editable = list(target = "cell", disable = list(columns = c(0)))
         ) %>%
-            formatCurrency("BaseValue", currency = "£", digits = 0)
+            formatCurrency("PriorExposure", currency = "£", digits = 0) %>%
+            formatCurrency("CurrentExposure", currency = "£", digits = 0)
     })
 
     observeEvent(input$schedule_tbl_cell_edit, {
@@ -754,9 +766,9 @@ server <- function(input, output, session) {
         i <- info$row
         j <- info$col
         v <- info$value
-        # Only BaseValue editable (DT uses 0-based col indexing)
-        if (j == 1) {
-            newv <- suppressWarnings(as.numeric(gsub("[^0-9.-]", "", v)))
+        # Reset buttons# Only exposure columns editable (DT uses 0-based col indexing)
+        if (j %in% c(1, 2)) {
+            newv <- suppressWarnings(as.numeric(gsub("[^0-9eE.+-]", "", v)))
             if (is.finite(newv) && newv >= 0) df[i, j + 1] <- newv
             schedule(df)
         }
@@ -1010,7 +1022,30 @@ server <- function(input, output, session) {
         )
     }
 
-    values_base <- reactive(schedule()$BaseValue)
+    values_prior <- reactive(schedule()$PriorExposure)
+    values_current <- reactive(schedule()$CurrentExposure)
+
+    exposure_syncing <- reactiveVal(FALSE)
+
+    observeEvent(input$dep_curr, {
+        if (isTRUE(exposure_syncing())) return()
+        exposure_syncing(TRUE)
+        df <- schedule()
+        df$CurrentExposure <- pmax(df$PriorExposure * (1 + input$dep_curr), 0)
+        schedule(df)
+        exposure_syncing(FALSE)
+    })
+
+    observeEvent(schedule(), {
+        if (isTRUE(exposure_syncing())) return()
+        exposure_syncing(TRUE)
+        df <- schedule()
+        prior_total <- sum(df$PriorExposure, na.rm = TRUE)
+        current_total <- sum(df$CurrentExposure, na.rm = TRUE)
+        dep_value <- if (prior_total > 0) (current_total / prior_total) - 1 else 0
+        updateSliderInput(session, "dep_curr", value = dep_value)
+        exposure_syncing(FALSE)
+    })
 
     # ==========================================================================
     # LLOYD'S RATE CHANGE REACTIVE STUBS
@@ -1075,7 +1110,7 @@ server <- function(input, output, session) {
     # Includes: current ROL, current q_gu, current allocation (from MBBEFD)
     # --------------------------------------------------------------------------
     current_inputs <- reactive({
-        # Current ROL from UI
+        # Current ROL from UI␊
         current_rol <- input$rol
 
         # Current attachment
@@ -1093,6 +1128,49 @@ server <- function(input, output, session) {
             current_attachment = current_attachment,
             current_q_gu = current_q_gu_vec,
             current_allocation = current_alloc_vec
+        )
+    })
+
+    # --------------------------------------------------------------------------
+    # Exposure change impact (auto) for "Other Exposure Change"
+    # --------------------------------------------------------------------------
+    exposure_change_delta <- reactive({
+        bro <- input$brokerage
+        rol <- input$rol
+        cpar <- effective_c()
+        A_current <- input$excess_curr
+
+        prior_exposure <- calc_scenario(
+            values_base = values_prior(),
+            dep = 0,
+            attachment = A_current,
+            rol = rol,
+            brokerage = bro,
+            c_curve = cpar,
+            q_gu = q_gu
+        )
+
+        current_exposure <- calc_scenario(
+            values_base = values_current(),
+            dep = 0,
+            attachment = A_current,
+            rol = rol,
+            brokerage = bro,
+            c_curve = cpar,
+            q_gu = q_gu
+        )
+
+        current_exposure$gp - prior_exposure$gp
+    })
+
+    output$auto_other_exposure_change <- renderUI({
+        auto_delta <- exposure_change_delta()
+        tags$div(
+            style = "font-size: 0.85rem; color: #6c757d; margin-top: 0.25rem;",
+            paste0(
+                "Auto exposure impact from schedule change: ",
+                fmt_money(auto_delta)
+            )
         )
     })
 
@@ -1166,7 +1244,7 @@ server <- function(input, output, session) {
     # ASSUMPTION: We use base_values (not depreciated) for weighting
     # --------------------------------------------------------------------------
     portfolio_c <- reactive({
-        compute_portfolio_c(q_gu, values_base())
+        compute_portfolio_c(q_gu, values_current())
     })
 
     # --------------------------------------------------------------------------
@@ -1250,7 +1328,7 @@ server <- function(input, output, session) {
     # --------------------------------------------------------------------------
     prior_exposure_rerated_current_method <- reactive({
         # Get prior exposure parameters
-        v0 <- values_base()
+        v0 <- values_prior()
         A_prior <- input$excess_prior
         bro <- input$brokerage
         cpar <- effective_c()
@@ -1324,7 +1402,7 @@ server <- function(input, output, session) {
 
         # ----- Component 1: Deductible/Attachment Change -----
         # Calculate: prior values/ROL but with CURRENT attachment
-        v0 <- values_base()
+        v0 <- values_prior()
         rol <- input$rol
         cpar <- effective_c()
         A_prior <- input$excess_prior
@@ -1349,8 +1427,8 @@ server <- function(input, output, session) {
         delta_breadth <- input$breadth_of_cover_change
 
         # ----- Component 3: Other Exposure Change -----
-        # User input (manual adjustment)
-        delta_other <- input$other_exposure_change
+        # Auto exposure change from schedule, plus manual adjustment
+        delta_other <- exposure_change_delta() + input$other_exposure_change
 
         # ----- Component 4: Pure Rate Change (RARC) -----
         # Residual: whatever is left after accounting for 1, 2, 3
@@ -1576,7 +1654,7 @@ server <- function(input, output, session) {
 
     prior <- reactive({
         calc_scenario(
-            values_base = values_base(),
+            values_base = values_prior(),
             dep = 0,
             attachment = input$excess_prior,
             rol = input$rol,
@@ -1588,7 +1666,7 @@ server <- function(input, output, session) {
 
     current <- reactive({
         calc_scenario(
-            values_base = values_base(),
+            values_base = values_current(),
             dep = input$dep_curr,
             attachment = input$excess_curr,
             rol = input$rol,
@@ -1660,7 +1738,7 @@ server <- function(input, output, session) {
         rol <- input$rol
         bro <- input$brokerage
 
-        v0 <- values_base()
+        v0 <- values_prior()
         A0 <- input$excess_prior
         A1 <- input$excess_curr
         dep1 <- input$dep_curr
@@ -1989,11 +2067,11 @@ server <- function(input, output, session) {
             )
     })
     output$ec_curve <- renderPlotly({
-        vals0 <- values_base()
-        # Scenario MPL (tower top) consistent with your “tower top = max(V_i)” assumption
-        MPL0 <- max(vals0)               # prior MPL (no dep)
-        vals1 <- vals0 * (1 + input$dep_curr)
-        MPL1 <- max(vals1)               # current MPL (post-dep)
+        vals0 <- values_prior()
+        # Scenario MPL (tower top) consistent with your “tower top = max(V_i)” assumption␊
+        MPL0 <- max(vals0)               # prior MPL (no dep)␊
+        vals1 <- values_current()
+        MPL1 <- max(vals1)             # current MPL (post-dep)
 
         # Use your scenario limits
         L0 <- prior()$limit
