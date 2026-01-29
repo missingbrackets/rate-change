@@ -260,6 +260,128 @@ ui <- page_sidebar(
                 )
             ),
             open = FALSE
+        ),
+        # ==================================================================
+        # LLOYD'S RATE CHANGE: Prior Year Inputs (optional)
+        # ==================================================================
+        accordion(
+            id = "lloyds_accordion",
+            accordion_panel(
+                title = tagList(icon("clock-rotate-left"), " Prior Year (optional)"),
+                tags$div(
+                    style = "font-size: 0.92rem;",
+                    tags$p(
+                        style = "color: #6c757d; margin-bottom: 0.75rem;",
+                        "For Lloyd's RARC calculation: capture last year's pricing inputs."
+                    ),
+                    # Prior ROL
+                    sliderInput(
+                        "prior_rol",
+                        tip("Prior Rate on Line", "Last year's ROL for RARC comparison"),
+                        min = 0.0025, max = 0.03, value = 0.0105, step = 0.0001
+                    ),
+                    tags$hr(),
+                    # Prior Failure Rates toggle + table
+                    switchInput(
+                        "use_prior_failure_rates",
+                        label = "Use prior failure rates",
+                        value = FALSE,
+                        onLabel = "Yes",
+                        offLabel = "No",
+                        size = "small"
+                    ),
+                    conditionalPanel(
+                        condition = "input.use_prior_failure_rates == true",
+                        tags$div(
+                            style = "margin-top: 0.5rem;",
+                            tags$small(
+                                style = "color: #6c757d;",
+                                "Edit prior year ground-up failure rates (q_gu):"
+                            ),
+                            DTOutput("prior_q_gu_tbl", height = "auto")
+                        )
+                    ),
+                    tags$hr(),
+                    # Prior Allocation toggle + table
+                    switchInput(
+                        "use_prior_allocation",
+                        label = "Use manual prior allocation",
+                        value = FALSE,
+                        onLabel = "Yes",
+                        offLabel = "No",
+                        size = "small"
+                    ),
+                    conditionalPanel(
+                        condition = "input.use_prior_allocation == true",
+                        tags$div(
+                            style = "margin-top: 0.5rem;",
+                            tags$small(
+                                style = "color: #6c757d;",
+                                "Edit prior year layer allocation weights (must sum to 1):"
+                            ),
+                            DTOutput("prior_alloc_tbl", height = "auto"),
+                            uiOutput("prior_alloc_validation")
+                        )
+                    )
+                )
+            ),
+            accordion_panel(
+                title = tagList(icon("calculator"), " Rerated View (current method)"),
+                tags$div(
+                    style = "font-size: 0.92rem;",
+                    tags$p(
+                        style = "color: #6c757d; margin-bottom: 0.75rem;",
+                        "Prior exposure re-rated using current methodology."
+                    ),
+                    # Rerated failure rates toggle + table
+                    switchInput(
+                        "use_rerated_manual_rates",
+                        label = "Override rerated failure rates",
+                        value = FALSE,
+                        onLabel = "Yes",
+                        offLabel = "No",
+                        size = "small"
+                    ),
+                    conditionalPanel(
+                        condition = "input.use_rerated_manual_rates == true",
+                        tags$div(
+                            style = "margin-top: 0.5rem;",
+                            tags$small(
+                                style = "color: #6c757d;",
+                                "Edit failure rates for rerated view (default = current q_gu):"
+                            ),
+                            DTOutput("rerated_q_gu_tbl", height = "auto")
+                        )
+                    ),
+                    tags$hr(),
+                    # Rerated allocation - MBBEFD by default
+                    switchInput(
+                        "use_rerated_manual_alloc",
+                        label = "Override rerated allocation",
+                        value = FALSE,
+                        onLabel = "Manual",
+                        offLabel = "MBBEFD",
+                        size = "small"
+                    ),
+                    tags$small(
+                        style = "color: #6c757d;",
+                        "Layer allocation: Uses MBBEFD curve by default."
+                    ),
+                    conditionalPanel(
+                        condition = "input.use_rerated_manual_alloc == true",
+                        tags$div(
+                            style = "margin-top: 0.5rem;",
+                            tags$small(
+                                style = "color: #6c757d;",
+                                "Manual rerated allocation weights (must sum to 1):"
+                            ),
+                            DTOutput("rerated_alloc_tbl", height = "auto"),
+                            uiOutput("rerated_alloc_validation")
+                        )
+                    )
+                )
+            ),
+            open = FALSE
         )
     ),
     useShinyjs(),
@@ -470,6 +592,190 @@ server <- function(input, output, session) {
         }
     })
 
+    # ==========================================================================
+    # LLOYD'S RATE CHANGE: Prior Year & Rerated View Tables
+    # ==========================================================================
+
+    # --- Prior Failure Rates (q_gu) ---
+    prior_q_gu_state <- reactiveVal(
+        data.frame(
+            Satellite = sat_names,
+            q_gu_prior = q_gu,
+            stringsAsFactors = FALSE
+        )
+    )
+
+    output$prior_q_gu_tbl <- renderDT({
+        datatable(
+            prior_q_gu_state(),
+            rownames = FALSE,
+            options = list(dom = "t", pageLength = 4, ordering = FALSE),
+            editable = list(target = "cell", disable = list(columns = c(0)))
+        ) %>%
+            formatPercentage("q_gu_prior", digits = 4)
+    })
+
+    observeEvent(input$prior_q_gu_tbl_cell_edit, {
+        info <- input$prior_q_gu_tbl_cell_edit
+        df <- prior_q_gu_state()
+        i <- info$row
+        j <- info$col
+        v <- info$value
+        if (j == 1) {
+            # Parse as percentage or decimal
+            newv <- suppressWarnings(as.numeric(gsub("[^0-9.eE-]", "", v)))
+            # If > 1, assume percentage input (e.g., 0.1 entered as 0.1%)
+            if (is.finite(newv) && newv >= 0) {
+                df[i, j + 1] <- newv
+                prior_q_gu_state(df)
+            }
+        }
+    })
+
+    # --- Prior Allocation Weights ---
+    prior_alloc_state <- reactiveVal(
+        data.frame(
+            Satellite = sat_names,
+            Allocation = rep(1 / length(sat_names), length(sat_names)),
+            stringsAsFactors = FALSE
+        )
+    )
+
+    output$prior_alloc_tbl <- renderDT({
+        datatable(
+            prior_alloc_state(),
+            rownames = FALSE,
+            options = list(dom = "t", pageLength = 4, ordering = FALSE),
+            editable = list(target = "cell", disable = list(columns = c(0)))
+        ) %>%
+            formatPercentage("Allocation", digits = 2)
+    })
+
+    observeEvent(input$prior_alloc_tbl_cell_edit, {
+        info <- input$prior_alloc_tbl_cell_edit
+        df <- prior_alloc_state()
+        i <- info$row
+        j <- info$col
+        v <- info$value
+        if (j == 1) {
+            newv <- suppressWarnings(as.numeric(gsub("[^0-9.eE-]", "", v)))
+            if (is.finite(newv) && newv >= 0 && newv <= 1) {
+                df[i, j + 1] <- newv
+                prior_alloc_state(df)
+            }
+        }
+    })
+
+    # Validation: prior allocation must sum to 1
+    output$prior_alloc_validation <- renderUI({
+        alloc_sum <- sum(prior_alloc_state()$Allocation)
+        tol <- 0.0001
+        if (abs(alloc_sum - 1) > tol) {
+            tags$div(
+                style = "color: #dc3545; font-size: 0.85rem; margin-top: 0.5rem;",
+                icon("exclamation-triangle"),
+                sprintf(" Weights sum to %.4f (must equal 1.0)", alloc_sum)
+            )
+        } else {
+            tags$div(
+                style = "color: #28a745; font-size: 0.85rem; margin-top: 0.5rem;",
+                icon("check-circle"),
+                " Weights sum to 1.0"
+            )
+        }
+    })
+
+    # --- Rerated Failure Rates (for rerated view) ---
+    rerated_q_gu_state <- reactiveVal(
+        data.frame(
+            Satellite = sat_names,
+            q_gu_rerated = q_gu,
+            stringsAsFactors = FALSE
+        )
+    )
+
+    output$rerated_q_gu_tbl <- renderDT({
+        datatable(
+            rerated_q_gu_state(),
+            rownames = FALSE,
+            options = list(dom = "t", pageLength = 4, ordering = FALSE),
+            editable = list(target = "cell", disable = list(columns = c(0)))
+        ) %>%
+            formatPercentage("q_gu_rerated", digits = 4)
+    })
+
+    observeEvent(input$rerated_q_gu_tbl_cell_edit, {
+        info <- input$rerated_q_gu_tbl_cell_edit
+        df <- rerated_q_gu_state()
+        i <- info$row
+        j <- info$col
+        v <- info$value
+        if (j == 1) {
+            newv <- suppressWarnings(as.numeric(gsub("[^0-9.eE-]", "", v)))
+            if (is.finite(newv) && newv >= 0) {
+                df[i, j + 1] <- newv
+                rerated_q_gu_state(df)
+            }
+        }
+    })
+
+    # --- Rerated Allocation Weights (manual override) ---
+    rerated_alloc_state <- reactiveVal(
+        data.frame(
+            Satellite = sat_names,
+            Allocation = rep(1 / length(sat_names), length(sat_names)),
+            stringsAsFactors = FALSE
+        )
+    )
+
+    output$rerated_alloc_tbl <- renderDT({
+        datatable(
+            rerated_alloc_state(),
+            rownames = FALSE,
+            options = list(dom = "t", pageLength = 4, ordering = FALSE),
+            editable = list(target = "cell", disable = list(columns = c(0)))
+        ) %>%
+            formatPercentage("Allocation", digits = 2)
+    })
+
+    observeEvent(input$rerated_alloc_tbl_cell_edit, {
+        info <- input$rerated_alloc_tbl_cell_edit
+        df <- rerated_alloc_state()
+        i <- info$row
+        j <- info$col
+        v <- info$value
+        if (j == 1) {
+            newv <- suppressWarnings(as.numeric(gsub("[^0-9.eE-]", "", v)))
+            if (is.finite(newv) && newv >= 0 && newv <= 1) {
+                df[i, j + 1] <- newv
+                rerated_alloc_state(df)
+            }
+        }
+    })
+
+    # Validation: rerated allocation must sum to 1
+    output$rerated_alloc_validation <- renderUI({
+        alloc_sum <- sum(rerated_alloc_state()$Allocation)
+        tol <- 0.0001
+        if (abs(alloc_sum - 1) > tol) {
+            tags$div(
+                style = "color: #dc3545; font-size: 0.85rem; margin-top: 0.5rem;",
+                icon("exclamation-triangle"),
+                sprintf(" Weights sum to %.4f (must equal 1.0)", alloc_sum)
+            )
+        } else {
+            tags$div(
+                style = "color: #28a745; font-size: 0.85rem; margin-top: 0.5rem;",
+                icon("check-circle"),
+                " Weights sum to 1.0"
+            )
+        }
+    })
+
+    # ==========================================================================
+    # END LLOYD'S RATE CHANGE: Prior Year & Rerated View Tables
+    # ==========================================================================
+
     # Lock ROL unless unlocked
     observe({
         if (!isTRUE(input$unlock_rol)) {
@@ -548,31 +854,114 @@ server <- function(input, output, session) {
     # 1. prior_inputs()
     # --------------------------------------------------------------------------
     # Captures last year's pricing inputs for RARC comparison
-    # Will include: last_year_rol, last_year_q_gu (optional),
-    #               last_year_layer_alloc (optional)
+    # Includes: prior ROL, prior q_gu (optional), prior allocation (optional)
+    # Uses existing input$excess_prior for attachment
     # --------------------------------------------------------------------------
     prior_inputs <- reactive({
-        # STUB: Returns NULL until implemented
-        # Future implementation will capture:
-        # - Last year's ROL (possibly from a UI input or stored value)
-        # - Last year's ground-up failure rates (if tracking year-over-year)
-        # - Last year's layer allocation weights
-        NULL
+        # Prior ROL from UI
+        prior_rol <- input$prior_rol
+
+        # Prior attachment (reuse existing slider)
+        prior_attachment <- input$excess_prior
+
+        # Prior failure rates: use custom if toggled, else default q_gu
+        use_prior_q <- isTRUE(input$use_prior_failure_rates)
+        prior_q_gu_vec <- if (use_prior_q) {
+            prior_q_gu_state()$q_gu_prior
+        } else {
+            q_gu  # Default to current q_gu
+        }
+
+        # Prior allocation: use manual if toggled, else NULL (will use MBBEFD)
+        use_prior_alloc <- isTRUE(input$use_prior_allocation)
+        prior_alloc_vec <- if (use_prior_alloc) {
+            prior_alloc_state()$Allocation
+        } else {
+            NULL  # Signal to use MBBEFD curve
+        }
+
+        # Validation flags
+        prior_alloc_valid <- if (use_prior_alloc) {
+            abs(sum(prior_alloc_state()$Allocation) - 1) < 0.0001
+        } else {
+            TRUE
+        }
+
+        list(
+            prior_rol = prior_rol,
+            prior_attachment = prior_attachment,
+            use_prior_failure_rates = use_prior_q,
+            prior_q_gu = prior_q_gu_vec,
+            use_prior_allocation = use_prior_alloc,
+            prior_allocation = prior_alloc_vec,
+            prior_allocation_valid = prior_alloc_valid
+        )
     })
 
     # --------------------------------------------------------------------------
     # 2. current_inputs()
     # --------------------------------------------------------------------------
-    # Formalizes current year pricing inputs (extends existing logic)
-    # Will include: current_rol, current_q_gu, current_layer_alloc
+    # Formalizes current year pricing inputs
+    # Includes: current ROL, current q_gu, current allocation (from MBBEFD)
     # --------------------------------------------------------------------------
     current_inputs <- reactive({
-        # STUB: Returns NULL until implemented
-        # Future implementation will formalize:
-        # - Current ROL from input$rol
-        # - Current ground-up failure rates (q_gu vector)
-        # - Current layer allocation from exposure curve
-        NULL
+        # Current ROL from UI
+        current_rol <- input$rol
+
+        # Current attachment
+        current_attachment <- input$excess_curr
+
+        # Current failure rates (always use default q_gu for now)
+        current_q_gu_vec <- q_gu
+
+        # Current allocation: computed from MBBEFD curve in current() reactive
+        # Will be populated when we integrate with current() scenario
+        current_alloc_vec <- current()$w_curve
+
+        list(
+            current_rol = current_rol,
+            current_attachment = current_attachment,
+            current_q_gu = current_q_gu_vec,
+            current_allocation = current_alloc_vec
+        )
+    })
+
+    # --------------------------------------------------------------------------
+    # Helper: Rerated view inputs
+    # --------------------------------------------------------------------------
+    # Inputs for re-rating prior exposure using current methodology
+    # --------------------------------------------------------------------------
+    rerated_inputs <- reactive({
+        # Rerated failure rates: use manual if toggled, else use current q_gu
+        use_manual_rates <- isTRUE(input$use_rerated_manual_rates)
+        rerated_q_gu_vec <- if (use_manual_rates) {
+            rerated_q_gu_state()$q_gu_rerated
+        } else {
+            q_gu  # Default to current q_gu
+        }
+
+        # Rerated allocation: use manual if toggled, else use MBBEFD (NULL signals MBBEFD)
+        use_manual_alloc <- isTRUE(input$use_rerated_manual_alloc)
+        rerated_alloc_vec <- if (use_manual_alloc) {
+            rerated_alloc_state()$Allocation
+        } else {
+            NULL  # Signal to use MBBEFD curve
+        }
+
+        # Validation flags
+        rerated_alloc_valid <- if (use_manual_alloc) {
+            abs(sum(rerated_alloc_state()$Allocation) - 1) < 0.0001
+        } else {
+            TRUE
+        }
+
+        list(
+            use_manual_rates = use_manual_rates,
+            rerated_q_gu = rerated_q_gu_vec,
+            use_manual_allocation = use_manual_alloc,
+            rerated_allocation = rerated_alloc_vec,
+            rerated_allocation_valid = rerated_alloc_valid
+        )
     })
 
     # --------------------------------------------------------------------------
