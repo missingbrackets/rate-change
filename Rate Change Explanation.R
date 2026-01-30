@@ -170,6 +170,23 @@ server <- function(input, output, session) {
   })
 
   # ==========================================================================
+  # AUTO-CLAMP LIMITS: limit <= (exposure - attachment)
+  # ==========================================================================
+  # This observer fires whenever schedule or layer_terms change, ensuring
+  # that limits never exceed (exposure - attachment) per satellite.
+  observe({
+    sched <- schedule()
+    layer <- layer_terms_state()
+
+    # Check if any limits need clamping
+    if (has_invalid_limits(layer, sched)) {
+      # Clamp and update (use isolate to prevent infinite loop)
+      clamped <- clamp_layer_limits(layer, sched)
+      isolate(layer_terms_state(clamped))
+    }
+  })
+
+  # ==========================================================================
   # RESET BUTTONS
   # ==========================================================================
   observeEvent(input$reset_defaults, {
@@ -307,6 +324,8 @@ server <- function(input, output, session) {
           df$CurrentExposure[i] <- parsed$Current[i]
         }
         schedule(df)
+        # Auto-clamp limits if new exposures make them invalid
+        layer_terms_state(clamp_layer_limits(layer_terms_state(), df))
       } else if (target == "rol") {
         df <- rol_state()
         for (i in seq_len(min(nrow(parsed), nrow(df)))) {

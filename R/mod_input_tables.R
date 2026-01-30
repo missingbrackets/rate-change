@@ -209,6 +209,94 @@ handle_layer_terms_edit <- function(df, edit_info) {
   df
 }
 
+# ==============================================================================
+# Limit Validation Functions
+# ==============================================================================
+
+#' Calculate maximum allowed limit per satellite
+#'
+#' The limit cannot exceed (exposure - attachment) for each satellite.
+#' This returns the maximum allowed limit for each row.
+#'
+#' @param exposures Vector of exposure values
+#' @param attachments Vector of attachment values
+#' @return Vector of maximum allowed limits (floored at 0)
+calculate_max_limits <- function(exposures, attachments) {
+  pmax(exposures - attachments, 0)
+}
+
+#' Clamp layer terms limits to valid range
+#'
+#' Ensures that limits do not exceed (exposure - attachment) for each satellite.
+#' This function modifies the layer_terms_df in place to enforce the constraint.
+#'
+#' @param layer_terms_df Layer terms data frame with PriorAttachment, PriorLimit,
+#'                       CurrentAttachment, CurrentLimit columns
+#' @param schedule_df Schedule data frame with PriorExposure, CurrentExposure columns
+#' @return Updated layer terms data frame with clamped limits
+clamp_layer_limits <- function(layer_terms_df, schedule_df) {
+  n <- nrow(layer_terms_df)
+
+  for (i in seq_len(n)) {
+    # Clamp prior limit
+    max_prior_limit <- pmax(schedule_df$PriorExposure[i] - layer_terms_df$PriorAttachment[i], 0)
+    if (layer_terms_df$PriorLimit[i] > max_prior_limit) {
+      layer_terms_df$PriorLimit[i] <- max_prior_limit
+    }
+
+    # Clamp current limit
+    max_current_limit <- pmax(schedule_df$CurrentExposure[i] - layer_terms_df$CurrentAttachment[i], 0)
+    if (layer_terms_df$CurrentLimit[i] > max_current_limit) {
+      layer_terms_df$CurrentLimit[i] <- max_current_limit
+    }
+  }
+
+  layer_terms_df
+}
+
+#' Check if any limits exceed their maximum allowed values
+#'
+#' Returns TRUE if any limit exceeds (exposure - attachment) for any satellite.
+#'
+#' @param layer_terms_df Layer terms data frame
+#' @param schedule_df Schedule data frame
+#' @return Logical indicating if any limits are invalid
+has_invalid_limits <- function(layer_terms_df, schedule_df) {
+  n <- nrow(layer_terms_df)
+
+  for (i in seq_len(n)) {
+    max_prior <- pmax(schedule_df$PriorExposure[i] - layer_terms_df$PriorAttachment[i], 0)
+    max_current <- pmax(schedule_df$CurrentExposure[i] - layer_terms_df$CurrentAttachment[i], 0)
+
+    if (layer_terms_df$PriorLimit[i] > max_prior + 0.01 ||
+        layer_terms_df$CurrentLimit[i] > max_current + 0.01) {
+      return(TRUE)
+    }
+  }
+
+  FALSE
+}
+
+#' Get limit validation status per satellite
+#'
+#' Returns a data frame showing the validation status for each satellite's limits.
+#'
+#' @param layer_terms_df Layer terms data frame
+#' @param schedule_df Schedule data frame
+#' @return Data frame with Satellite, MaxPriorLimit, MaxCurrentLimit, PriorValid, CurrentValid
+get_limit_validation_status <- function(layer_terms_df, schedule_df) {
+  n <- nrow(layer_terms_df)
+
+  data.frame(
+    Satellite = layer_terms_df$Satellite,
+    MaxPriorLimit = pmax(schedule_df$PriorExposure - layer_terms_df$PriorAttachment, 0),
+    MaxCurrentLimit = pmax(schedule_df$CurrentExposure - layer_terms_df$CurrentAttachment, 0),
+    PriorValid = layer_terms_df$PriorLimit <= pmax(schedule_df$PriorExposure - layer_terms_df$PriorAttachment, 0) + 0.01,
+    CurrentValid = layer_terms_df$CurrentLimit <= pmax(schedule_df$CurrentExposure - layer_terms_df$CurrentAttachment, 0) + 0.01,
+    stringsAsFactors = FALSE
+  )
+}
+
 #' Copy prior values to current for schedule
 #'
 #' @param df Schedule data frame
