@@ -210,7 +210,13 @@ build_pmdr_accordion <- function(ns = identity) {
         shiny::tags$h6("Layer Allocation"),
         shiny::tags$pre("Allocation_i = (LayerShare_i \u00d7 Value_i) / \u03a3(...)"),
         shiny::tags$h6("Implied LR"),
-        shiny::tags$pre("LR = EL / NetPremium")
+        shiny::tags$pre("LR = EL / NetPremium"),
+        shiny::tags$h6("Rate Change (from Loss Ratios)"),
+        shiny::tags$pre("RateChange = LR_prior / LR_current \u2212 1"),
+        shiny::tags$p(
+          style = "font-size: 0.8rem; color: #6c757d;",
+          "Positive rate change = prices increased = LR decreased"
+        )
       )
     ),
     open = FALSE

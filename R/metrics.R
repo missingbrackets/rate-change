@@ -612,6 +612,79 @@ calculate_rarc_index <- function(rerated_gross, prior_gross) {
   rerated_gross / prior_gross
 }
 
+#' Calculate rate change from loss ratios
+#'
+#' Rate change implied by loss ratio movement:
+#' Rate Change = LR_prior / LR_current - 1
+#'
+#' Interpretation:
+#' - Positive rate change = prices increased = LR decreased
+#' - Negative rate change = prices decreased = LR increased
+#'
+#' @param lr_prior Prior loss ratio
+#' @param lr_current Current loss ratio
+#' @return Rate change as decimal (e.g., 0.10 = 10% rate increase)
+calculate_rate_change_from_lr <- function(lr_prior, lr_current) {
+
+  if (!is.finite(lr_prior) || !is.finite(lr_current)) return(NA_real_)
+  if (lr_current <= 0) return(NA_real_)
+  lr_prior / lr_current - 1
+}
+
+#' Reconcile rate change with PMDR decomposition
+#'
+#' Compares rate change from loss ratios vs. rate change implied by PMDR components.
+#' PMDR pure rate change (delta_pure_rate) should be consistent with LR-implied change.
+#'
+#' @param lr_prior Prior loss ratio
+#' @param lr_current Current loss ratio
+#' @param prior_gross Prior gross premium
+#' @param delta_pure_rate Pure rate change component from PMDR (in currency units)
+#' @param tolerance Acceptable difference threshold (default 0.02 = 2%)
+#' @return List with:
+#'   - rate_change_lr: rate change from loss ratios
+#'   - rate_change_pmdr: rate change from PMDR (delta_pure_rate / prior_gross)
+#'   - difference: absolute difference
+#'   - reconciled: TRUE if within tolerance
+#'   - message: description of result
+reconcile_rate_change <- function(lr_prior, lr_current, prior_gross, delta_pure_rate, tolerance = 0.02) {
+
+  rate_change_lr <- calculate_rate_change_from_lr(lr_prior, lr_current)
+
+  # PMDR pure rate change as percentage of prior gross
+  rate_change_pmdr <- if (prior_gross > 0) delta_pure_rate / prior_gross else NA_real_
+
+  # Check if both are valid
+  if (!is.finite(rate_change_lr) || !is.finite(rate_change_pmdr)) {
+    return(list(
+      rate_change_lr = rate_change_lr,
+      rate_change_pmdr = rate_change_pmdr,
+      difference = NA_real_,
+      reconciled = FALSE,
+      message = "Cannot reconcile: missing or invalid values"
+    ))
+  }
+
+  difference <- abs(rate_change_lr - rate_change_pmdr)
+  reconciled <- difference <= tolerance
+
+  message <- if (reconciled) {
+    sprintf("Reconciled: LR-implied %.2f%% vs PMDR %.2f%% (diff: %.2f%%)",
+            rate_change_lr * 100, rate_change_pmdr * 100, difference * 100)
+  } else {
+    sprintf("WARNING: LR-implied %.2f%% vs PMDR %.2f%% (diff: %.2f%% exceeds %.0f%% tolerance)",
+            rate_change_lr * 100, rate_change_pmdr * 100, difference * 100, tolerance * 100)
+  }
+
+  list(
+    rate_change_lr = rate_change_lr,
+    rate_change_pmdr = rate_change_pmdr,
+    difference = difference,
+    reconciled = reconciled,
+    message = message
+  )
+}
+
 # --------------------------
 # Validation Helpers
 # --------------------------

@@ -526,6 +526,15 @@ server <- function(input, output, session) {
     reconstructed <- prior_gross + delta_attachment + delta_breadth + delta_other + delta_deductions + delta_pure_rate
     decomp_error <- abs(reconstructed - current_gross)
 
+    # Rate change from loss ratios: LR_prior / LR_current - 1
+    # Positive = prices up, LR down
+    lr_prior <- p$lr
+    lr_current <- c$lr
+    rate_change_lr <- calculate_rate_change_from_lr(lr_prior, lr_current)
+
+    # Reconciliation: compare LR-implied rate change vs PMDR pure rate change
+    reconciliation <- reconcile_rate_change(lr_prior, lr_current, prior_gross, delta_pure_rate)
+
     list(
       prior_gross = prior_gross, prior_net = prior_net,
       delta_attachment = delta_attachment, delta_breadth = delta_breadth,
@@ -536,6 +545,9 @@ server <- function(input, output, session) {
       benchmark_gross = benchmark_gross, benchmark_net = benchmark_net,
       price_adequacy = price_adeq,
       el_prior = p$el, el_current = el_current,
+      lr_prior = lr_prior, lr_current = lr_current,
+      rate_change_lr = rate_change_lr,
+      reconciliation = reconciliation,
       reconstructed = reconstructed, decomp_error = decomp_error
     )
   })

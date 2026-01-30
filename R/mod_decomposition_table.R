@@ -121,8 +121,34 @@ render_lloyds_decomp_table <- function(decomp, rarc) {
       )
     ),
 
+    # Rate Change from Loss Ratios
+    shiny::tags$h6("Rate Change (from Loss Ratios)"),
+    shiny::tags$p(
+      style = "font-size: 0.75rem; color: #6c757d; margin-bottom: 0.25rem;",
+      "Rate Change = LR\u209A\u1D63\u1D62\u1D52\u1D63 / LR\u1D9C\u1D64\u1D63\u1D63\u1D49\u207F\u1D57 - 1"
+    ),
+    shiny::tags$table(
+      class = "table table-sm",
+      style = "margin-bottom: 1rem;",
+      shiny::tags$tbody(
+        shiny::tags$tr(
+          shiny::tags$td("Prior Loss Ratio"),
+          shiny::tags$td(style = "text-align: right;", fmt_decomp_pct(decomp$lr_prior))
+        ),
+        shiny::tags$tr(
+          shiny::tags$td("Current Loss Ratio"),
+          shiny::tags$td(style = "text-align: right;", fmt_decomp_pct(decomp$lr_current))
+        ),
+        shiny::tags$tr(
+          style = "font-weight: bold; background: #d4edda;",
+          shiny::tags$td("Rate Change (LR-implied)"),
+          shiny::tags$td(style = "text-align: right;", fmt_decomp_pct(decomp$rate_change_lr))
+        )
+      )
+    ),
+
     # RARC Index Table
-    shiny::tags$h6("RARC Index"),
+    shiny::tags$h6("RARC Index (Premium-based)"),
     shiny::tags$table(
       class = "table table-sm",
       shiny::tags$tbody(
@@ -133,6 +159,22 @@ render_lloyds_decomp_table <- function(decomp, rarc) {
         )
       )
     ),
+
+    # Reconciliation status
+    if (!is.null(decomp$reconciliation)) {
+      recon <- decomp$reconciliation
+      recon_style <- if (isTRUE(recon$reconciled)) {
+        "color: #28a745; font-size: 0.8rem;"
+      } else {
+        "color: #dc3545; font-size: 0.8rem;"
+      }
+      recon_icon <- if (isTRUE(recon$reconciled)) "check-circle" else "exclamation-triangle"
+      shiny::tags$div(
+        style = recon_style,
+        shiny::icon(recon_icon),
+        paste0(" ", recon$message)
+      )
+    },
 
     # Verification status
     if (decomp$decomp_error > 0.01) {
