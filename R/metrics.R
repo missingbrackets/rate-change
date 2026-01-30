@@ -389,6 +389,95 @@ compute_portfolio_c <- function(q_gu_vec, values_vec, lookup_df) {
   sum(c_per_sat * weights, na.rm = TRUE)
 }
 
+#' Compute per-satellite curve diagnostics
+#'
+#' Calculates detailed curve metrics for each satellite using per-satellite
+#' c parameters derived from their individual failure rates.
+#'
+#' @param sat_names Vector of satellite names
+#' @param values Vector of satellite values (used as per-satellite MPL)
+#' @param q_gu Vector of ground-up failure rates per satellite
+#' @param A Attachment point
+#' @param L Limit
+#' @param lookup_df Data frame with 'c' and 'expectation' columns for c lookup
+#' @return Data frame with columns:
+#'   - Satellite: satellite name
+#'   - Value: satellite value (MPL)
+#'   - QGU: ground-up failure rate
+#'   - c_i: per-satellite curve parameter
+#'   - d: lower bound as fraction of MPL (A/MPL)
+#'   - u: upper bound as fraction of MPL ((A+L)/MPL)
+#'   - Gd: exposure curve value at lower bound G(d)
+#'   - Gu: exposure curve value at upper bound G(u)
+#'   - Share: layer share = G(u) - G(d)
+#'   - q_layer: layer-adjusted failure rate (q_gu × share)
+compute_per_satellite_curve_diagnostics <- function(sat_names, values, q_gu, A, L, lookup_df) {
+  n <- length(sat_names)
+
+  # Get per-satellite c values from failure rates
+  c_per_sat <- compute_per_satellite_c(q_gu, lookup_df)
+
+  # Compute curve diagnostics for each satellite using its own c parameter
+  diagnostics <- lapply(seq_len(n), function(i) {
+    MPL_i <- values[i]
+    c_i <- c_per_sat[i]
+
+    # Use per-satellite c for the layer share calculation
+    share_info <- layer_share_from_curve(A, L, MPL_i, c_i)
+
+    data.frame(
+      Satellite = sat_names[i],
+      Value = values[i],
+      QGU = q_gu[i],
+      c_i = c_i,
+      d = share_info$d,
+      u = share_info$u,
+      Gd = share_info$Gd,
+      Gu = share_info$Gu,
+      Share = share_info$share,
+      q_layer = q_gu[i] * share_info$share,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  do.call(rbind, diagnostics)
+}
+
+#' Compute curve allocation using per-satellite c parameters
+#'
+#' Alternative to curve_allocation_and_q that uses per-satellite c values
+#' derived from each satellite's failure rate, rather than a single portfolio c.
+#'
+#' @param sat_names Vector of satellite names
+#' @param values Vector of satellite values (used as per-satellite MPL)
+#' @param q_gu Vector of ground-up failure rates per satellite
+#' @param A Attachment point
+#' @param L Limit
+#' @param lookup_df Data frame with 'c' and 'expectation' columns
+#' @return List containing:
+#'   - shares: vector of layer shares per satellite (using per-sat c)
+#'   - w_curve: allocation weights (normalized, sum to 1)
+#'   - q_layer: layer-adjusted failure rates (q_gu × shares)
+#'   - c_per_sat: per-satellite c values used
+curve_allocation_per_satellite_c <- function(sat_names, values, q_gu, A, L, lookup_df) {
+  diag <- compute_per_satellite_curve_diagnostics(sat_names, values, q_gu, A, L, lookup_df)
+
+  shares <- diag$Share
+  q_layer <- diag$q_layer
+  c_per_sat <- diag$c_i
+
+  # Allocation weight proportional to share × value
+  raw <- shares * pmax(values, 0)
+  w_curve <- if (sum(raw) > 0) raw / sum(raw) else rep(0, length(values))
+
+  list(
+    shares = shares,
+    w_curve = w_curve,
+    q_layer = q_layer,
+    c_per_sat = c_per_sat
+  )
+}
+
 # --------------------------
 # Scenario Calculation
 # --------------------------
@@ -521,6 +610,79 @@ calculate_pmdr_decomposition <- function(
 calculate_rarc_index <- function(rerated_gross, prior_gross) {
   if (prior_gross <= 0) return(NA_real_)
   rerated_gross / prior_gross
+}
+
+#' Calculate rate change from loss ratios
+#'
+#' Rate change implied by loss ratio movement:
+#' Rate Change = LR_prior / LR_current - 1
+#'
+#' Interpretation:
+#' - Positive rate change = prices increased = LR decreased
+#' - Negative rate change = prices decreased = LR increased
+#'
+#' @param lr_prior Prior loss ratio
+#' @param lr_current Current loss ratio
+#' @return Rate change as decimal (e.g., 0.10 = 10% rate increase)
+calculate_rate_change_from_lr <- function(lr_prior, lr_current) {
+
+  if (!is.finite(lr_prior) || !is.finite(lr_current)) return(NA_real_)
+  if (lr_current <= 0) return(NA_real_)
+  lr_prior / lr_current - 1
+}
+
+#' Reconcile rate change with PMDR decomposition
+#'
+#' Compares rate change from loss ratios vs. rate change implied by PMDR components.
+#' PMDR pure rate change (delta_pure_rate) should be consistent with LR-implied change.
+#'
+#' @param lr_prior Prior loss ratio
+#' @param lr_current Current loss ratio
+#' @param prior_gross Prior gross premium
+#' @param delta_pure_rate Pure rate change component from PMDR (in currency units)
+#' @param tolerance Acceptable difference threshold (default 0.02 = 2%)
+#' @return List with:
+#'   - rate_change_lr: rate change from loss ratios
+#'   - rate_change_pmdr: rate change from PMDR (delta_pure_rate / prior_gross)
+#'   - difference: absolute difference
+#'   - reconciled: TRUE if within tolerance
+#'   - message: description of result
+reconcile_rate_change <- function(lr_prior, lr_current, prior_gross, delta_pure_rate, tolerance = 0.02) {
+
+  rate_change_lr <- calculate_rate_change_from_lr(lr_prior, lr_current)
+
+  # PMDR pure rate change as percentage of prior gross
+  rate_change_pmdr <- if (prior_gross > 0) delta_pure_rate / prior_gross else NA_real_
+
+  # Check if both are valid
+  if (!is.finite(rate_change_lr) || !is.finite(rate_change_pmdr)) {
+    return(list(
+      rate_change_lr = rate_change_lr,
+      rate_change_pmdr = rate_change_pmdr,
+      difference = NA_real_,
+      reconciled = FALSE,
+      message = "Cannot reconcile: missing or invalid values"
+    ))
+  }
+
+  difference <- abs(rate_change_lr - rate_change_pmdr)
+  reconciled <- difference <= tolerance
+
+  message <- if (reconciled) {
+    sprintf("Reconciled: LR-implied %.2f%% vs PMDR %.2f%% (diff: %.2f%%)",
+            rate_change_lr * 100, rate_change_pmdr * 100, difference * 100)
+  } else {
+    sprintf("WARNING: LR-implied %.2f%% vs PMDR %.2f%% (diff: %.2f%% exceeds %.0f%% tolerance)",
+            rate_change_lr * 100, rate_change_pmdr * 100, difference * 100, tolerance * 100)
+  }
+
+  list(
+    rate_change_lr = rate_change_lr,
+    rate_change_pmdr = rate_change_pmdr,
+    difference = difference,
+    reconciled = reconciled,
+    message = message
+  )
 }
 
 # --------------------------
