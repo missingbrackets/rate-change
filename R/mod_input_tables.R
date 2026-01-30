@@ -79,26 +79,40 @@ render_layer_terms_table <- function(data) {
 
 #' Render a layer allocation output table
 #'
+#' Shows full EL components: EL = q_gu × VIL × Share
+#' Where: VIL = Value in Layer, Share = layer exposure fraction G(u) - G(d)
+#'
 #' @param prior Prior scenario results list
 #' @param current Current scenario results list
 #' @param sat_names Vector of satellite names
 #' @return A DT datatable object
 render_layer_allocation_table <- function(prior, current, sat_names) {
-  # Build per-satellite rows using raw shares (not normalized w_curve)
-  # shares = G(u) - G(d) = actual layer exposure fraction per satellite
+
+  # Build per-satellite rows with full EL breakdown
+
+  # EL formula: EL = q_gu × VIL × Share = q_layer × VIL
+  # Where: q_layer = q_gu × Share
   df <- data.frame(
     Satellite = sat_names,
+    PriorVIL = prior$vil,
+    CurrentVIL = current$vil,
+    PriorQGU = prior$q_gu,
+    CurrentQGU = current$q_gu,
     PriorShare = prior$shares,
     CurrentShare = current$shares,
-    PriorEL = prior$q_layer * prior$vil,
-    CurrentEL = current$q_layer * current$vil,
+    PriorEL = prior$q_gu * prior$vil * prior$shares,
+    CurrentEL = current$q_gu * current$vil * current$shares,
     stringsAsFactors = FALSE
   )
 
-  # Add totals row - sum from the data frame to ensure consistency with displayed values
-  # Use na.rm = TRUE to handle any potential NA/NaN values
+  # Add totals row - sum from the data frame to ensure consistency
+  # Note: VIL and QGU totals show sum/average for reference
   df <- rbind(df, data.frame(
     Satellite = "TOTAL",
+    PriorVIL = sum(df$PriorVIL, na.rm = TRUE),
+    CurrentVIL = sum(df$CurrentVIL, na.rm = TRUE),
+    PriorQGU = NA_real_,
+    CurrentQGU = NA_real_,
     PriorShare = sum(df$PriorShare, na.rm = TRUE),
     CurrentShare = sum(df$CurrentShare, na.rm = TRUE),
     PriorEL = sum(df$PriorEL, na.rm = TRUE),
@@ -107,10 +121,13 @@ render_layer_allocation_table <- function(prior, current, sat_names) {
 
   DT::datatable(
     df,
-    colnames = c("Satellite", "Prior Share", "Current Share", "Prior EL", "Current EL"),
+    colnames = c("Satellite", "Prior VIL", "Curr VIL", "Prior q", "Curr q",
+                 "Prior Share", "Curr Share", "Prior EL", "Curr EL"),
     rownames = FALSE,
-    options = list(dom = "t", pageLength = 5, ordering = FALSE)
+    options = list(dom = "t", pageLength = 5, ordering = FALSE, scrollX = TRUE)
   ) %>%
+    DT::formatCurrency(c("PriorVIL", "CurrentVIL"), currency = "\u00a3", digits = 0) %>%
+    DT::formatPercentage(c("PriorQGU", "CurrentQGU"), digits = 3) %>%
     DT::formatPercentage(c("PriorShare", "CurrentShare"), digits = 2) %>%
     DT::formatCurrency(c("PriorEL", "CurrentEL"), currency = "\u00a3", digits = 0)
 }
