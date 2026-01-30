@@ -193,6 +193,140 @@ server <- function(input, output, session) {
   })
 
   # ==========================================================================
+  # APPLY TO ALL BUTTONS - ROL
+  # ==========================================================================
+  observeEvent(input$apply_rol_prior, {
+    val <- input$apply_rol_value
+    if (is.finite(val) && val >= 0) {
+      df <- rol_state()
+      df$PriorROL <- rep(val, nrow(df))
+      rol_state(df)
+    }
+  })
+
+  observeEvent(input$apply_rol_current, {
+    val <- input$apply_rol_value
+    if (is.finite(val) && val >= 0) {
+      df <- rol_state()
+      df$CurrentROL <- rep(val, nrow(df))
+      rol_state(df)
+    }
+  })
+
+  observeEvent(input$apply_rol_both, {
+    val <- input$apply_rol_value
+    if (is.finite(val) && val >= 0) {
+      df <- rol_state()
+      df$PriorROL <- rep(val, nrow(df))
+      df$CurrentROL <- rep(val, nrow(df))
+      rol_state(df)
+    }
+  })
+
+  # ==========================================================================
+  # APPLY TO ALL BUTTONS - QGU
+  # ==========================================================================
+  observeEvent(input$apply_qgu_prior, {
+    val <- input$apply_qgu_value
+    if (is.finite(val) && val >= 0 && val <= 1) {
+      df <- qgu_state()
+      df$PriorQGU <- rep(val, nrow(df))
+      qgu_state(df)
+    }
+  })
+
+  observeEvent(input$apply_qgu_current, {
+    val <- input$apply_qgu_value
+    if (is.finite(val) && val >= 0 && val <= 1) {
+      df <- qgu_state()
+      df$CurrentQGU <- rep(val, nrow(df))
+      qgu_state(df)
+    }
+  })
+
+  observeEvent(input$apply_qgu_both, {
+    val <- input$apply_qgu_value
+    if (is.finite(val) && val >= 0 && val <= 1) {
+      df <- qgu_state()
+      df$PriorQGU <- rep(val, nrow(df))
+      df$CurrentQGU <- rep(val, nrow(df))
+      qgu_state(df)
+    }
+  })
+
+  # ==========================================================================
+  # BULK PASTE MODAL
+  # ==========================================================================
+  observeEvent(input$open_bulk_paste, {
+    showModal(build_bulk_paste_modal())
+  })
+
+  # Preview parsed data
+  output$bulk_paste_preview <- renderUI({
+    data_text <- input$bulk_paste_data
+    if (is.null(data_text) || nchar(trimws(data_text)) == 0) {
+      return(NULL)
+    }
+
+    parsed <- parse_bulk_paste_data(data_text)
+    if (is.null(parsed) || nrow(parsed) == 0) {
+      return(tags$div(style = "color: #dc3545;", icon("exclamation-triangle"), " Could not parse data"))
+    }
+
+    tags$div(
+      style = "margin-top: 0.5rem;",
+      tags$b("Preview (", nrow(parsed), " rows):"),
+      tags$table(
+        class = "table table-sm table-bordered",
+        style = "font-size: 0.8rem; margin-top: 0.25rem;",
+        tags$thead(tags$tr(tags$th("Satellite"), tags$th("Prior"), tags$th("Current"))),
+        tags$tbody(
+          lapply(seq_len(min(nrow(parsed), 5)), function(i) {
+            tags$tr(
+              tags$td(parsed$Satellite[i]),
+              tags$td(format(parsed$Prior[i], big.mark = ",", scientific = FALSE)),
+              tags$td(format(parsed$Current[i], big.mark = ",", scientific = FALSE))
+            )
+          })
+        )
+      )
+    )
+  })
+
+  # Apply bulk paste
+  observeEvent(input$apply_bulk_paste, {
+    data_text <- input$bulk_paste_data
+    target <- input$bulk_paste_target
+    parsed <- parse_bulk_paste_data(data_text)
+
+    if (!is.null(parsed) && nrow(parsed) > 0) {
+      if (target == "schedule") {
+        df <- schedule()
+        for (i in seq_len(min(nrow(parsed), nrow(df)))) {
+          df$PriorExposure[i] <- parsed$Prior[i]
+          df$CurrentExposure[i] <- parsed$Current[i]
+        }
+        schedule(df)
+      } else if (target == "rol") {
+        df <- rol_state()
+        for (i in seq_len(min(nrow(parsed), nrow(df)))) {
+          df$PriorROL[i] <- parsed$Prior[i]
+          df$CurrentROL[i] <- parsed$Current[i]
+        }
+        rol_state(df)
+      } else if (target == "qgu") {
+        df <- qgu_state()
+        for (i in seq_len(min(nrow(parsed), nrow(df)))) {
+          df$PriorQGU[i] <- parsed$Prior[i]
+          df$CurrentQGU[i] <- parsed$Current[i]
+        }
+        qgu_state(df)
+      }
+      removeModal()
+    }
+  })
+
+  # ==========================================================================
   # HELPER REACTIVES: EXTRACT VALUES FROM TABLES
   # ==========================================================================
   values_prior <- reactive(schedule()$PriorExposure)

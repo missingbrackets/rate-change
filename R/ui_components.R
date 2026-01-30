@@ -58,14 +58,38 @@ build_deal_inputs_card <- function(ns = identity) {
     DT::DTOutput(ns("schedule_tbl")),
     shiny::tags$hr(),
 
-    # ROL Table
+    # ROL Table with Apply to All
     section_header("Rate on Line (ROL) - Satellite Level", "Per-satellite ROL for prior and current year."),
     DT::DTOutput(ns("rol_tbl")),
+    bslib::layout_column_wrap(
+      width = 1 / 2,
+      style = "margin-top: 0.5rem;",
+      shiny::tags$div(
+        style = "display: flex; gap: 0.25rem; align-items: center;",
+        shiny::numericInput(ns("apply_rol_value"), NULL, value = 0.0105, min = 0, max = 1, step = 0.0001, width = "100px"),
+        shiny::actionButton(ns("apply_rol_prior"), "Prior", class = "btn btn-sm btn-outline-secondary"),
+        shiny::actionButton(ns("apply_rol_current"), "Curr", class = "btn btn-sm btn-outline-secondary"),
+        shiny::actionButton(ns("apply_rol_both"), "Both", class = "btn btn-sm btn-secondary")
+      ),
+      shiny::tags$small(style = "color: #6c757d; align-self: center;", "Apply ROL to all satellites")
+    ),
     shiny::tags$hr(),
 
-    # QGU Table
+    # QGU Table with Apply to All
     section_header("Ground-Up Failure Rates (QGU) - Satellite Level", "Per-satellite ground-up failure rates."),
     DT::DTOutput(ns("qgu_tbl")),
+    bslib::layout_column_wrap(
+      width = 1 / 2,
+      style = "margin-top: 0.5rem;",
+      shiny::tags$div(
+        style = "display: flex; gap: 0.25rem; align-items: center;",
+        shiny::numericInput(ns("apply_qgu_value"), NULL, value = 0.001, min = 0, max = 1, step = 0.0001, width = "100px"),
+        shiny::actionButton(ns("apply_qgu_prior"), "Prior", class = "btn btn-sm btn-outline-secondary"),
+        shiny::actionButton(ns("apply_qgu_current"), "Curr", class = "btn btn-sm btn-outline-secondary"),
+        shiny::actionButton(ns("apply_qgu_both"), "Both", class = "btn btn-sm btn-secondary")
+      ),
+      shiny::tags$small(style = "color: #6c757d; align-self: center;", "Apply QGU to all satellites")
+    ),
     shiny::tags$hr(),
 
     # Layer Terms Table
@@ -119,6 +143,9 @@ build_deal_inputs_card <- function(ns = identity) {
     ),
     shiny::tags$hr(),
 
+    # Bulk paste button
+    shiny::actionButton(ns("open_bulk_paste"), "Bulk Paste Data...", class = "btn btn-outline-info w-100 mb-2", icon = shiny::icon("paste")),
+
     # Reset buttons
     bslib::layout_column_wrap(
       width = 1 / 2,
@@ -163,11 +190,12 @@ build_pmdr_accordion <- function(ns = identity) {
       )
     ),
     bslib::accordion_panel(
-      title = shiny::tagList(shiny::icon("table"), " Lloyd's Decomposition (verification)"),
-      value = "lloyds_decomposition",
+      title = shiny::tagList(shiny::icon("heart-pulse"), " Risk View (EL, LR, Benchmark)"),
+      value = "risk_view",
       shiny::tags$div(
         style = "font-size: 0.92rem;",
-        shiny::uiOutput(ns("lloyds_decomp_table"))
+        shiny::uiOutput(ns("risk_cards")),
+        plotly::plotlyOutput(ns("risk_line"), height = 200)
       )
     ),
     bslib::accordion_panel(
@@ -270,10 +298,10 @@ build_charts_row <- function(ns = identity) {
   )
 }
 
-#' Build the allocation and risk view row
+#' Build the allocation and decomposition row
 #'
 #' @param ns Namespace function for module IDs
-#' @return A layout_column_wrap with allocation table and risk cards
+#' @return A layout_column_wrap with allocation table and Lloyd's decomposition
 build_allocation_risk_row <- function(ns = identity) {
   bslib::layout_column_wrap(
     width = 1 / 2,
@@ -289,9 +317,12 @@ build_allocation_risk_row <- function(ns = identity) {
     ),
     bslib::card(
       full_screen = TRUE,
-      bslib::card_header(shiny::tagList(shiny::icon("heart-pulse"), "Risk View (EL, LR, Benchmark)")),
-      shiny::uiOutput(ns("risk_cards")),
-      plotly::plotlyOutput(ns("risk_line"), height = 220)
+      bslib::card_header(shiny::tagList(shiny::icon("table"), "Lloyd's Decomposition")),
+      shiny::uiOutput(ns("lloyds_decomp_table")),
+      shiny::tags$div(
+        style = "font-size:0.85rem; color:#5a6b7b; margin-top:0.5rem;",
+        "PMDR breakdown showing prior-to-current premium change components."
+      )
     )
   )
 }
@@ -337,6 +368,53 @@ tooltip_init_script <- function() {
       [...document.querySelectorAll('[data-bs-toggle=\"tooltip\"]')].forEach(el => new bootstrap.Tooltip(el));
     });
   "))
+}
+
+#' Build the bulk paste modal
+#'
+#' @param ns Namespace function for module IDs
+#' @return A modalDialog for bulk data entry
+build_bulk_paste_modal <- function(ns = identity) {
+  shiny::modalDialog(
+    title = shiny::tagList(shiny::icon("paste"), " Bulk Paste Data"),
+    size = "l",
+    easyClose = TRUE,
+    shiny::tags$p(
+      style = "color: #6c757d;",
+      "Paste tab-separated or comma-separated data. Format: Satellite, Prior Value, Current Value"
+    ),
+    shiny::selectInput(
+      ns("bulk_paste_target"),
+      "Target Table",
+      choices = c(
+        "Schedule Exposures" = "schedule",
+        "Rate on Line (ROL)" = "rol",
+        "Failure Rates (QGU)" = "qgu"
+      ),
+      selected = "schedule"
+    ),
+    shiny::tags$div(
+      style = "margin-bottom: 0.5rem;",
+      shiny::tags$b("Example format:"),
+      shiny::tags$pre(
+        style = "font-size: 0.8rem; background: #f8f9fa; padding: 0.5rem; border-radius: 4px;",
+        "V1, 6500000000, 6600000000\nV2, 6700000000, 6800000000\nV3, 6200000000, 6300000000\nV4, 8400000000, 8500000000"
+      )
+    ),
+    shiny::textAreaInput(
+      ns("bulk_paste_data"),
+      "Paste Data Here",
+      value = "",
+      rows = 8,
+      width = "100%",
+      placeholder = "Paste your data here (CSV or tab-separated)..."
+    ),
+    shiny::uiOutput(ns("bulk_paste_preview")),
+    footer = shiny::tagList(
+      shiny::modalButton("Cancel"),
+      shiny::actionButton(ns("apply_bulk_paste"), "Apply Data", class = "btn btn-primary", icon = shiny::icon("check"))
+    )
+  )
 }
 
 # ==============================================================================

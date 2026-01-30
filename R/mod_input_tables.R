@@ -247,5 +247,70 @@ copy_prior_to_current_layer_terms <- function(df) {
 }
 
 # ==============================================================================
+# Bulk Paste Data Parsing
+# ==============================================================================
+
+#' Parse bulk paste data from text input
+#'
+#' Parses CSV or tab-separated data into a data frame with columns:
+#' Satellite, Prior, Current. Handles various formats and cleans numeric values.
+#'
+#' @param text Raw text from text area input
+#' @return Data frame with Satellite, Prior, Current columns, or NULL if parsing fails
+parse_bulk_paste_data <- function(text) {
+  if (is.null(text) || nchar(trimws(text)) == 0) {
+    return(NULL)
+  }
+
+  # Split into lines
+  lines <- strsplit(text, "\n")[[1]]
+  lines <- trimws(lines)
+  lines <- lines[nchar(lines) > 0]
+
+  if (length(lines) == 0) {
+    return(NULL)
+  }
+
+  # Parse each line
+  result <- lapply(lines, function(line) {
+    # Try comma first, then tab
+    if (grepl(",", line)) {
+      parts <- strsplit(line, ",")[[1]]
+    } else if (grepl("\t", line)) {
+      parts <- strsplit(line, "\t")[[1]]
+    } else {
+      parts <- strsplit(line, "\\s+")[[1]]
+    }
+
+    parts <- trimws(parts)
+
+    if (length(parts) >= 3) {
+      sat <- parts[1]
+      prior <- suppressWarnings(as.numeric(gsub("[^0-9eE.+-]", "", parts[2])))
+      current <- suppressWarnings(as.numeric(gsub("[^0-9eE.+-]", "", parts[3])))
+
+      if (!is.na(prior) && !is.na(current)) {
+        return(data.frame(
+          Satellite = sat,
+          Prior = prior,
+          Current = current,
+          stringsAsFactors = FALSE
+        ))
+      }
+    }
+    NULL
+  })
+
+  # Combine valid rows
+  result <- result[!sapply(result, is.null)]
+
+  if (length(result) == 0) {
+    return(NULL)
+  }
+
+  do.call(rbind, result)
+}
+
+# ==============================================================================
 # END R/mod_input_tables.R
 # ==============================================================================
