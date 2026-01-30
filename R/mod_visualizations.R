@@ -280,13 +280,13 @@ render_risk_line <- function(prior, current, target_lr) {
 
 #' Render per-satellite MBBEFD exposure curves
 #'
-#' Shows multiple exposure curves, one per satellite, using each satellite's
-#' individual c parameter derived from its failure rate.
+#' Shows separate exposure curves for prior and current scenarios per satellite.
+#' Prior curves use prior q_gu (solid lines), current curves use current q_gu (dashed).
 #'
 #' @param diag_prior Data frame from compute_per_satellite_curve_diagnostics (prior)
 #' @param diag_current Data frame from compute_per_satellite_curve_diagnostics (current)
 #' @param sat_names Vector of satellite names
-#' @return A plotly chart with per-satellite curves
+#' @return A plotly chart with prior and current curves per satellite
 render_per_satellite_curves <- function(diag_prior, diag_current, sat_names) {
   # Define colors for satellites
   colors <- c("#3498db", "#e74c3c", "#27ae60", "#9b59b6", "#f39c12", "#1abc9c")
@@ -297,69 +297,90 @@ render_per_satellite_curves <- function(diag_prior, diag_current, sat_names) {
   # Generate x values for curve plotting
   xs <- seq(0, 1, length.out = 100)
 
-  # Add a curve for each satellite (using prior c values)
+  # Add curves for each satellite - both prior and current
+
   for (i in seq_along(sat_names)) {
-    c_i <- diag_prior$c_i[i]
-    Gs <- G_mbbefd(xs, c_i)
+    sat_color <- colors[(i - 1) %% length(colors) + 1]
+
+    # Prior curve (solid line) using prior c value
+    c_prior <- diag_prior$c_i[i]
+    Gs_prior <- G_mbbefd(xs, c_prior)
 
     p <- p %>% plotly::add_lines(
-      x = xs, y = Gs,
-      name = paste0(sat_names[i], " (c=", round(c_i, 2), ")"),
-      line = list(color = colors[(i - 1) %% length(colors) + 1]),
+      x = xs, y = Gs_prior,
+      name = paste0(sat_names[i], " Prior (c=", round(c_prior, 2), ")"),
+      line = list(color = sat_color, width = 2, dash = "solid"),
+      legendgroup = sat_names[i],
       hoverinfo = "text",
-      hovertext = paste0(sat_names[i], "<br>c=", round(c_i, 3), "<br>x=", round(xs, 3), "<br>G(x)=", round(Gs, 3))
+      hovertext = paste0(sat_names[i], " Prior<br>c=", round(c_prior, 3),
+                         "<br>x=", round(xs, 3), "<br>G(x)=", round(Gs_prior, 3))
     )
 
-    # Add prior layer points for this satellite
+    # Current curve (dashed line) using current c value
+    c_current <- diag_current$c_i[i]
+    Gs_current <- G_mbbefd(xs, c_current)
+
+    # Only add current curve if c differs from prior (avoid duplicate lines)
+    if (abs(c_current - c_prior) > 0.001) {
+      p <- p %>% plotly::add_lines(
+        x = xs, y = Gs_current,
+        name = paste0(sat_names[i], " Current (c=", round(c_current, 2), ")"),
+        line = list(color = sat_color, width = 2, dash = "dash"),
+        legendgroup = sat_names[i],
+        hoverinfo = "text",
+        hovertext = paste0(sat_names[i], " Current<br>c=", round(c_current, 3),
+                           "<br>x=", round(xs, 3), "<br>G(x)=", round(Gs_current, 3))
+      )
+    }
+
+    # Add prior layer points (circles) on prior curve
     p <- p %>% plotly::add_markers(
       x = c(diag_prior$d[i], diag_prior$u[i]),
       y = c(diag_prior$Gd[i], diag_prior$Gu[i]),
-      name = paste0(sat_names[i], " Prior"),
-      marker = list(
-        color = colors[(i - 1) %% length(colors) + 1],
-        symbol = "circle",
-        size = 8
-      ),
+      name = paste0(sat_names[i], " Prior pts"),
+      marker = list(color = sat_color, symbol = "circle", size = 8),
+      legendgroup = sat_names[i],
       showlegend = FALSE,
       hoverinfo = "text",
       hovertext = c(
-        paste0(sat_names[i], " Prior<br>d=", sprintf("%.3f", diag_prior$d[i]), "<br>G(d)=", sprintf("%.3f", diag_prior$Gd[i])),
-        paste0(sat_names[i], " Prior<br>u=", sprintf("%.3f", diag_prior$u[i]), "<br>G(u)=", sprintf("%.3f", diag_prior$Gu[i]))
+        paste0(sat_names[i], " Prior<br>d=", sprintf("%.3f", diag_prior$d[i]),
+               "<br>G(d)=", sprintf("%.3f", diag_prior$Gd[i]),
+               "<br>Share=", sprintf("%.2f%%", diag_prior$Share[i] * 100)),
+        paste0(sat_names[i], " Prior<br>u=", sprintf("%.3f", diag_prior$u[i]),
+               "<br>G(u)=", sprintf("%.3f", diag_prior$Gu[i]))
       )
     )
 
-    # Add current layer points if different from prior
-    if (!identical(diag_prior$d[i], diag_current$d[i]) || !identical(diag_prior$u[i], diag_current$u[i])) {
-      p <- p %>% plotly::add_markers(
-        x = c(diag_current$d[i], diag_current$u[i]),
-        y = c(diag_current$Gd[i], diag_current$Gu[i]),
-        name = paste0(sat_names[i], " Current"),
-        marker = list(
-          color = colors[(i - 1) %% length(colors) + 1],
-          symbol = "diamond",
-          size = 10
-        ),
-        showlegend = FALSE,
-        hoverinfo = "text",
-        hovertext = c(
-          paste0(sat_names[i], " Current<br>d=", sprintf("%.3f", diag_current$d[i]), "<br>G(d)=", sprintf("%.3f", diag_current$Gd[i])),
-          paste0(sat_names[i], " Current<br>u=", sprintf("%.3f", diag_current$u[i]), "<br>G(u)=", sprintf("%.3f", diag_current$Gu[i]))
-        )
+    # Add current layer points (diamonds) on current curve
+    p <- p %>% plotly::add_markers(
+      x = c(diag_current$d[i], diag_current$u[i]),
+      y = c(diag_current$Gd[i], diag_current$Gu[i]),
+      name = paste0(sat_names[i], " Current pts"),
+      marker = list(color = sat_color, symbol = "diamond", size = 10),
+      legendgroup = sat_names[i],
+      showlegend = FALSE,
+      hoverinfo = "text",
+      hovertext = c(
+        paste0(sat_names[i], " Current<br>d=", sprintf("%.3f", diag_current$d[i]),
+               "<br>G(d)=", sprintf("%.3f", diag_current$Gd[i]),
+               "<br>Share=", sprintf("%.2f%%", diag_current$Share[i] * 100)),
+        paste0(sat_names[i], " Current<br>u=", sprintf("%.3f", diag_current$u[i]),
+               "<br>G(u)=", sprintf("%.3f", diag_current$Gu[i]))
       )
-    }
+    )
   }
 
   p %>% plotly::layout(
-    title = list(text = "<b>Per-Satellite MBBEFD Curves</b>", font = list(size = 14), x = 0.5),
+    title = list(text = "<b>Per-Satellite MBBEFD Curves (Prior vs Current)</b>", font = list(size = 14), x = 0.5),
     xaxis = list(title = "Deductible as % of MPL (x)", range = c(0, 1)),
     yaxis = list(title = "Exposure curve G(x)", range = c(0, 1)),
-    margin = list(l = 60, r = 20, t = 50, b = 50),
-    legend = list(orientation = "h", x = 0, y = -0.15, font = list(size = 9)),
+    margin = list(l = 60, r = 20, t = 50, b = 80),
+    legend = list(orientation = "h", x = 0, y = -0.2, font = list(size = 8)),
     annotations = list(
       list(
         x = 0.02, y = 0.02, xref = "paper", yref = "paper",
-        text = "Circle = Prior, Diamond = Current",
-        showarrow = FALSE, font = list(size = 9, color = "#666")
+        text = "Solid = Prior curve | Dashed = Current curve | Circle = Prior pts | Diamond = Current pts",
+        showarrow = FALSE, font = list(size = 8, color = "#666")
       )
     )
   )
