@@ -21,7 +21,7 @@
 #' Format currency in British Pounds
 #' @param x Numeric value to format
 #' @return Character string formatted as £X,XXX
-fmt_money <- function(x) scales::dollar(x, accuracy = 1, big.mark = ",", prefix = "£")
+fmt_money <- function(x) scales::dollar(x, accuracy = 1, big.mark = ",", prefix = "$")
 
 #' Format value in billions (£Xbn)
 #' @param x Numeric value to format
