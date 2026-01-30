@@ -251,6 +251,14 @@ build_charts_row <- function(ns = identity) {
         bslib::nav_panel(
           "MBBEFD Curve",
           plotly::plotlyOutput(ns("ec_curve"), height = 360)
+        ),
+        bslib::nav_panel(
+          "Per-Satellite Curves",
+          plotly::plotlyOutput(ns("per_satellite_curves"), height = 360),
+          shiny::tags$div(
+            style = "font-size:0.85rem; color:#5a6b7b;",
+            "Each satellite has its own c parameter derived from its failure rate"
+          )
         )
       )
     ),
@@ -284,6 +292,35 @@ build_allocation_risk_row <- function(ns = identity) {
       bslib::card_header(shiny::tagList(shiny::icon("heart-pulse"), "Risk View (EL, LR, Benchmark)")),
       shiny::uiOutput(ns("risk_cards")),
       plotly::plotlyOutput(ns("risk_line"), height = 220)
+    )
+  )
+}
+
+#' Build the per-satellite curve diagnostics row
+#'
+#' @param ns Namespace function for module IDs
+#' @return A layout_column_wrap with curve diagnostics table and share comparison
+build_curve_diagnostics_row <- function(ns = identity) {
+  bslib::layout_column_wrap(
+    width = 1 / 2,
+    gap = "1rem",
+    bslib::card(
+      full_screen = TRUE,
+      bslib::card_header(shiny::tagList(shiny::icon("chart-area"), "Per-Satellite Curve Diagnostics")),
+      DT::DTOutput(ns("curve_diagnostics_tbl")),
+      shiny::tags$div(
+        style = "font-size:0.85rem; color:#5a6b7b; margin-top:0.5rem;",
+        "Curve parameters (c_i), bounds (d, u), and layer shares per satellite"
+      )
+    ),
+    bslib::card(
+      full_screen = TRUE,
+      bslib::card_header(shiny::tagList(shiny::icon("chart-column"), "Layer Share Comparison")),
+      plotly::plotlyOutput(ns("layer_share_comparison"), height = 280),
+      shiny::tags$div(
+        style = "font-size:0.85rem; color:#5a6b7b; margin-top:0.5rem;",
+        "Prior vs Current layer shares using per-satellite c parameters"
+      )
     )
   )
 }

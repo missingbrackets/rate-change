@@ -389,6 +389,95 @@ compute_portfolio_c <- function(q_gu_vec, values_vec, lookup_df) {
   sum(c_per_sat * weights, na.rm = TRUE)
 }
 
+#' Compute per-satellite curve diagnostics
+#'
+#' Calculates detailed curve metrics for each satellite using per-satellite
+#' c parameters derived from their individual failure rates.
+#'
+#' @param sat_names Vector of satellite names
+#' @param values Vector of satellite values (used as per-satellite MPL)
+#' @param q_gu Vector of ground-up failure rates per satellite
+#' @param A Attachment point
+#' @param L Limit
+#' @param lookup_df Data frame with 'c' and 'expectation' columns for c lookup
+#' @return Data frame with columns:
+#'   - Satellite: satellite name
+#'   - Value: satellite value (MPL)
+#'   - QGU: ground-up failure rate
+#'   - c_i: per-satellite curve parameter
+#'   - d: lower bound as fraction of MPL (A/MPL)
+#'   - u: upper bound as fraction of MPL ((A+L)/MPL)
+#'   - Gd: exposure curve value at lower bound G(d)
+#'   - Gu: exposure curve value at upper bound G(u)
+#'   - Share: layer share = G(u) - G(d)
+#'   - q_layer: layer-adjusted failure rate (q_gu × share)
+compute_per_satellite_curve_diagnostics <- function(sat_names, values, q_gu, A, L, lookup_df) {
+  n <- length(sat_names)
+
+  # Get per-satellite c values from failure rates
+  c_per_sat <- compute_per_satellite_c(q_gu, lookup_df)
+
+  # Compute curve diagnostics for each satellite using its own c parameter
+  diagnostics <- lapply(seq_len(n), function(i) {
+    MPL_i <- values[i]
+    c_i <- c_per_sat[i]
+
+    # Use per-satellite c for the layer share calculation
+    share_info <- layer_share_from_curve(A, L, MPL_i, c_i)
+
+    data.frame(
+      Satellite = sat_names[i],
+      Value = values[i],
+      QGU = q_gu[i],
+      c_i = c_i,
+      d = share_info$d,
+      u = share_info$u,
+      Gd = share_info$Gd,
+      Gu = share_info$Gu,
+      Share = share_info$share,
+      q_layer = q_gu[i] * share_info$share,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  do.call(rbind, diagnostics)
+}
+
+#' Compute curve allocation using per-satellite c parameters
+#'
+#' Alternative to curve_allocation_and_q that uses per-satellite c values
+#' derived from each satellite's failure rate, rather than a single portfolio c.
+#'
+#' @param sat_names Vector of satellite names
+#' @param values Vector of satellite values (used as per-satellite MPL)
+#' @param q_gu Vector of ground-up failure rates per satellite
+#' @param A Attachment point
+#' @param L Limit
+#' @param lookup_df Data frame with 'c' and 'expectation' columns
+#' @return List containing:
+#'   - shares: vector of layer shares per satellite (using per-sat c)
+#'   - w_curve: allocation weights (normalized, sum to 1)
+#'   - q_layer: layer-adjusted failure rates (q_gu × shares)
+#'   - c_per_sat: per-satellite c values used
+curve_allocation_per_satellite_c <- function(sat_names, values, q_gu, A, L, lookup_df) {
+  diag <- compute_per_satellite_curve_diagnostics(sat_names, values, q_gu, A, L, lookup_df)
+
+  shares <- diag$Share
+  q_layer <- diag$q_layer
+  c_per_sat <- diag$c_i
+
+  # Allocation weight proportional to share × value
+  raw <- shares * pmax(values, 0)
+  w_curve <- if (sum(raw) > 0) raw / sum(raw) else rep(0, length(values))
+
+  list(
+    shares = shares,
+    w_curve = w_curve,
+    q_layer = q_layer,
+    c_per_sat = c_per_sat
+  )
+}
+
 # --------------------------
 # Scenario Calculation
 # --------------------------

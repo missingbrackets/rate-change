@@ -124,7 +124,8 @@ ui <- page_sidebar(
     gap = "1rem",
     build_kpi_row(),
     build_charts_row(),
-    build_allocation_risk_row()
+    build_allocation_risk_row(),
+    build_curve_diagnostics_row()
   )
 )
 
@@ -469,6 +470,49 @@ server <- function(input, output, session) {
 
   output$risk_line <- renderPlotly({
     render_risk_line(prior(), current(), input$target_lr)
+  })
+
+  # ==========================================================================
+  # PER-SATELLITE CURVE DIAGNOSTICS
+  # ==========================================================================
+
+  # Compute per-satellite curve diagnostics for prior scenario
+  curve_diag_prior <- reactive({
+    compute_per_satellite_curve_diagnostics(
+      sat_names = SAT_NAMES,
+      values = values_prior(),
+      q_gu = qgu_prior(),
+      A = attachment_prior(),
+      L = limit_prior(),
+      lookup_df = c_params_csv
+    )
+  })
+
+  # Compute per-satellite curve diagnostics for current scenario
+  curve_diag_current <- reactive({
+    compute_per_satellite_curve_diagnostics(
+      sat_names = SAT_NAMES,
+      values = values_current(),
+      q_gu = qgu_current(),
+      A = attachment_current(),
+      L = limit_current(),
+      lookup_df = c_params_csv
+    )
+  })
+
+  # Per-satellite curves chart
+  output$per_satellite_curves <- renderPlotly({
+    render_per_satellite_curves(curve_diag_prior(), curve_diag_current(), SAT_NAMES)
+  })
+
+  # Curve diagnostics table
+  output$curve_diagnostics_tbl <- renderDT({
+    render_per_satellite_curve_table(curve_diag_prior(), curve_diag_current())
+  })
+
+  # Layer share comparison chart
+  output$layer_share_comparison <- renderPlotly({
+    render_layer_share_comparison(curve_diag_prior(), curve_diag_current())
   })
 }
 

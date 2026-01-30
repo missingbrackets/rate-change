@@ -275,5 +275,193 @@ render_risk_line <- function(prior, current, target_lr) {
 }
 
 # ==============================================================================
+# Per-Satellite Exposure Curve Functions
+# ==============================================================================
+
+#' Render per-satellite MBBEFD exposure curves
+#'
+#' Shows multiple exposure curves, one per satellite, using each satellite's
+#' individual c parameter derived from its failure rate.
+#'
+#' @param diag_prior Data frame from compute_per_satellite_curve_diagnostics (prior)
+#' @param diag_current Data frame from compute_per_satellite_curve_diagnostics (current)
+#' @param sat_names Vector of satellite names
+#' @return A plotly chart with per-satellite curves
+render_per_satellite_curves <- function(diag_prior, diag_current, sat_names) {
+  # Define colors for satellites
+  colors <- c("#3498db", "#e74c3c", "#27ae60", "#9b59b6", "#f39c12", "#1abc9c")
+
+  # Create base plot
+  p <- plotly::plot_ly()
+
+  # Generate x values for curve plotting
+  xs <- seq(0, 1, length.out = 100)
+
+  # Add a curve for each satellite (using prior c values)
+  for (i in seq_along(sat_names)) {
+    c_i <- diag_prior$c_i[i]
+    Gs <- G_mbbefd(xs, c_i)
+
+    p <- p %>% plotly::add_lines(
+      x = xs, y = Gs,
+      name = paste0(sat_names[i], " (c=", round(c_i, 2), ")"),
+      line = list(color = colors[(i - 1) %% length(colors) + 1]),
+      hoverinfo = "text",
+      hovertext = paste0(sat_names[i], "<br>c=", round(c_i, 3), "<br>x=", round(xs, 3), "<br>G(x)=", round(Gs, 3))
+    )
+
+    # Add prior layer points for this satellite
+    p <- p %>% plotly::add_markers(
+      x = c(diag_prior$d[i], diag_prior$u[i]),
+      y = c(diag_prior$Gd[i], diag_prior$Gu[i]),
+      name = paste0(sat_names[i], " Prior"),
+      marker = list(
+        color = colors[(i - 1) %% length(colors) + 1],
+        symbol = "circle",
+        size = 8
+      ),
+      showlegend = FALSE,
+      hoverinfo = "text",
+      hovertext = c(
+        paste0(sat_names[i], " Prior<br>d=", sprintf("%.3f", diag_prior$d[i]), "<br>G(d)=", sprintf("%.3f", diag_prior$Gd[i])),
+        paste0(sat_names[i], " Prior<br>u=", sprintf("%.3f", diag_prior$u[i]), "<br>G(u)=", sprintf("%.3f", diag_prior$Gu[i]))
+      )
+    )
+
+    # Add current layer points if different from prior
+    if (!identical(diag_prior$d[i], diag_current$d[i]) || !identical(diag_prior$u[i], diag_current$u[i])) {
+      p <- p %>% plotly::add_markers(
+        x = c(diag_current$d[i], diag_current$u[i]),
+        y = c(diag_current$Gd[i], diag_current$Gu[i]),
+        name = paste0(sat_names[i], " Current"),
+        marker = list(
+          color = colors[(i - 1) %% length(colors) + 1],
+          symbol = "diamond",
+          size = 10
+        ),
+        showlegend = FALSE,
+        hoverinfo = "text",
+        hovertext = c(
+          paste0(sat_names[i], " Current<br>d=", sprintf("%.3f", diag_current$d[i]), "<br>G(d)=", sprintf("%.3f", diag_current$Gd[i])),
+          paste0(sat_names[i], " Current<br>u=", sprintf("%.3f", diag_current$u[i]), "<br>G(u)=", sprintf("%.3f", diag_current$Gu[i]))
+        )
+      )
+    }
+  }
+
+  p %>% plotly::layout(
+    title = list(text = "<b>Per-Satellite MBBEFD Curves</b>", font = list(size = 14), x = 0.5),
+    xaxis = list(title = "Deductible as % of MPL (x)", range = c(0, 1)),
+    yaxis = list(title = "Exposure curve G(x)", range = c(0, 1)),
+    margin = list(l = 60, r = 20, t = 50, b = 50),
+    legend = list(orientation = "h", x = 0, y = -0.15, font = list(size = 9)),
+    annotations = list(
+      list(
+        x = 0.02, y = 0.02, xref = "paper", yref = "paper",
+        text = "Circle = Prior, Diamond = Current",
+        showarrow = FALSE, font = list(size = 9, color = "#666")
+      )
+    )
+  )
+}
+
+#' Render per-satellite curve diagnostics table
+#'
+#' Creates a DT datatable showing curve diagnostics for each satellite.
+#'
+#' @param diag_prior Data frame from compute_per_satellite_curve_diagnostics (prior)
+#' @param diag_current Data frame from compute_per_satellite_curve_diagnostics (current)
+#' @return A DT datatable with per-satellite curve metrics
+render_per_satellite_curve_table <- function(diag_prior, diag_current) {
+  # Combine prior and current into a comparison table
+  df <- data.frame(
+    Satellite = diag_prior$Satellite,
+    Prior_c = diag_prior$c_i,
+    Current_c = diag_current$c_i,
+    Prior_d = diag_prior$d,
+    Current_d = diag_current$d,
+    Prior_Gd = diag_prior$Gd,
+    Current_Gd = diag_current$Gd,
+    Prior_Gu = diag_prior$Gu,
+    Current_Gu = diag_current$Gu,
+    Prior_Share = diag_prior$Share,
+    Current_Share = diag_current$Share,
+    Share_Change = diag_current$Share - diag_prior$Share,
+    stringsAsFactors = FALSE
+  )
+
+  DT::datatable(
+    df,
+    colnames = c(
+      "Sat", "Prior c", "Curr c",
+      "Prior d", "Curr d",
+      "Prior G(d)", "Curr G(d)",
+      "Prior G(u)", "Curr G(u)",
+      "Prior Share", "Curr Share", "\u0394 Share"
+    ),
+    rownames = FALSE,
+    options = list(
+      dom = "t",
+      pageLength = 10,
+      ordering = FALSE,
+      scrollX = TRUE,
+      columnDefs = list(
+        list(className = "dt-center", targets = "_all")
+      )
+    )
+  ) %>%
+    DT::formatRound(c("Prior_c", "Current_c"), digits = 2) %>%
+    DT::formatRound(c("Prior_d", "Current_d", "Prior_Gd", "Current_Gd", "Prior_Gu", "Current_Gu"), digits = 3) %>%
+    DT::formatPercentage(c("Prior_Share", "Current_Share", "Share_Change"), digits = 1)
+}
+
+#' Render layer share comparison bar chart
+#'
+#' Shows prior vs current layer shares per satellite as a grouped bar chart.
+#'
+#' @param diag_prior Data frame from compute_per_satellite_curve_diagnostics (prior)
+#' @param diag_current Data frame from compute_per_satellite_curve_diagnostics (current)
+#' @return A plotly grouped bar chart
+render_layer_share_comparison <- function(diag_prior, diag_current) {
+  plotly::plot_ly() %>%
+    plotly::add_bars(
+      x = diag_prior$Satellite,
+      y = diag_prior$Share * 100,
+      name = "Prior",
+      marker = list(color = "#3498db"),
+      text = paste0(round(diag_prior$Share * 100, 1), "%"),
+      textposition = "outside",
+      hoverinfo = "text",
+      hovertext = paste0(
+        diag_prior$Satellite, " Prior<br>",
+        "Share: ", sprintf("%.2f%%", diag_prior$Share * 100), "<br>",
+        "c: ", round(diag_prior$c_i, 2)
+      )
+    ) %>%
+    plotly::add_bars(
+      x = diag_current$Satellite,
+      y = diag_current$Share * 100,
+      name = "Current",
+      marker = list(color = "#e74c3c"),
+      text = paste0(round(diag_current$Share * 100, 1), "%"),
+      textposition = "outside",
+      hoverinfo = "text",
+      hovertext = paste0(
+        diag_current$Satellite, " Current<br>",
+        "Share: ", sprintf("%.2f%%", diag_current$Share * 100), "<br>",
+        "c: ", round(diag_current$c_i, 2)
+      )
+    ) %>%
+    plotly::layout(
+      title = list(text = "<b>Layer Share by Satellite</b>", font = list(size = 14), x = 0.5),
+      xaxis = list(title = ""),
+      yaxis = list(title = "Layer Share (%)", ticksuffix = "%"),
+      barmode = "group",
+      legend = list(orientation = "h", x = 0.5, xanchor = "center", y = -0.15),
+      margin = list(l = 60, r = 20, t = 50, b = 50)
+    )
+}
+
+# ==============================================================================
 # END R/mod_visualizations.R
 # ==============================================================================
