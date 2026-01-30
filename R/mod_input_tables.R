@@ -84,31 +84,34 @@ render_layer_terms_table <- function(data) {
 #' @param sat_names Vector of satellite names
 #' @return A DT datatable object
 render_layer_allocation_table <- function(prior, current, sat_names) {
+  # Build per-satellite rows using raw shares (not normalized w_curve)
+  # shares = G(u) - G(d) = actual layer exposure fraction per satellite
   df <- data.frame(
     Satellite = sat_names,
-    PriorAllocation = prior$w_curve,
-    CurrentAllocation = current$w_curve,
+    PriorShare = prior$shares,
+    CurrentShare = current$shares,
     PriorEL = prior$q_layer * prior$vil,
     CurrentEL = current$q_layer * current$vil,
     stringsAsFactors = FALSE
   )
 
-  # Add totals row
+  # Add totals row - sum from the data frame to ensure consistency with displayed values
+  # Use na.rm = TRUE to handle any potential NA/NaN values
   df <- rbind(df, data.frame(
     Satellite = "TOTAL",
-    PriorAllocation = sum(prior$w_curve),
-    CurrentAllocation = sum(current$w_curve),
-    PriorEL = sum(prior$q_layer * prior$vil),
-    CurrentEL = sum(current$q_layer * current$vil)
+    PriorShare = sum(df$PriorShare, na.rm = TRUE),
+    CurrentShare = sum(df$CurrentShare, na.rm = TRUE),
+    PriorEL = sum(df$PriorEL, na.rm = TRUE),
+    CurrentEL = sum(df$CurrentEL, na.rm = TRUE)
   ))
 
   DT::datatable(
     df,
-    colnames = c("Satellite", "Prior Alloc", "Current Alloc", "Prior EL", "Current EL"),
+    colnames = c("Satellite", "Prior Share", "Current Share", "Prior EL", "Current EL"),
     rownames = FALSE,
     options = list(dom = "t", pageLength = 5, ordering = FALSE)
   ) %>%
-    DT::formatPercentage(c("PriorAllocation", "CurrentAllocation"), digits = 2) %>%
+    DT::formatPercentage(c("PriorShare", "CurrentShare"), digits = 2) %>%
     DT::formatCurrency(c("PriorEL", "CurrentEL"), currency = "\u00a3", digits = 0)
 }
 
